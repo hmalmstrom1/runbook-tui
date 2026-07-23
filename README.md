@@ -9,6 +9,14 @@ A terminal user interface for running commands and HTTP requests from structured
 
 It is built with [ratatui](https://github.com/ratatui/ratatui) and [tokio](https://tokio.rs/) for an async, keyboard-driven terminal experience.
 
+## Screenshots
+
+### Runbook mode
+![Runbook mode showing command list and live output](docs/command_mode.png)
+
+### API mode
+![API mode showing requests, request/response bodies, and variables](docs/api_mode.png)
+
 ## Features
 
 - Two-pane layout: list on the left, history/output on the right.
@@ -107,6 +115,43 @@ Run it with `--api`:
 ./target/release/runbook-tui --api test_collection.json
 ```
 
+### Variables in API collections
+
+Postman-style variables defined at the collection level are substituted in the `url`, header `value`, and request `body` before a request is sent. Use the `{{variable_name}}` syntax. In API mode the lower-left Variables pane shows the current values; press `Tab` to focus it and `Enter` on a variable to edit its value for the current session.
+
+```json
+{
+  "info": { "name": "Variables Test" },
+  "variable": [
+    { "key": "baseUrl", "value": "https://httpbin.org", "type": "string" },
+    { "key": "greeting", "value": "Hello", "type": "string" },
+    { "key": "name", "value": "runbook-tui", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Post with variables",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/post",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"message\":\"{{greeting}} {{name}}!\"}"
+        }
+      }
+    }
+  ]
+}
+```
+
+Run it with `--api`:
+
+```bash
+./target/release/runbook-tui --api test_collection_variables.json
+```
+
 ## Keybindings
 
 ### Global
@@ -145,6 +190,9 @@ Run it with `--api`:
 | APIs | `/` | Search APIs |
 | APIs | `Esc` | Clear search |
 | APIs | letter key | Send API by its auto-assigned key |
+| Variables | `↑`/`↓` or `Ctrl+P`/`Ctrl+N` | Select variable |
+| Variables | `Enter` | Edit selected value |
+| Variables | `Esc` | Cancel edit |
 | Requests | `↑`/`↓` or `Ctrl+P`/`Ctrl+N` | Select request |
 | Requests | `PgUp`/`PgDn`/`Home`/`End` | Scroll response body |
 | Requests | `Esc`/`q` | Back to APIs |

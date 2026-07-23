@@ -73,7 +73,11 @@ pub(crate) fn ui(app: &mut App, frame: &mut Frame) {
             render_log(app, frame, output_area);
         }
         AppMode::Api => {
-            render_apis(app, frame, list_area);
+            let vars_height = (app.variables.len() as u16 + 2).clamp(4, 8);
+            let api_layout = Layout::vertical([Constraint::Fill(1), Constraint::Length(vars_height)]).spacing(1);
+            let [api_area, variables_area] = list_area.layout(&api_layout);
+            render_apis(app, frame, api_area);
+            render_variables(app, frame, variables_area);
             render_requests(app, frame, history_area);
             render_api_response(app, frame, output_area);
         }
@@ -95,7 +99,7 @@ fn render_search(app: &App, frame: &mut Frame, area: Rect) {
     let search_focused = app.focus == Focus::Commands && app.input_mode == InputMode::Search;
     let hint = match app.app_mode {
         AppMode::Runbook => "Type / to search, Enter to run, Ctrl+O open file, Tab panes, PgUp/Dn scroll output",
-        AppMode::Api => "Type / to search APIs, Enter to send, Ctrl+O open file, Tab panes, PgUp/Dn scroll body",
+        AppMode::Api => "Type / to search APIs, Enter to send/edit, Ctrl+O open file, Tab panes, PgUp/Dn scroll body",
     };
     let text = if app.search.is_empty() { hint } else { &app.search };
     let style = if search_focused { app.theme.input } else { app.theme.border };
@@ -242,6 +246,49 @@ fn render_apis(app: &mut App, frame: &mut Frame, area: Rect) {
         .highlight_symbol("> ");
 
     frame.render_stateful_widget(list, area, &mut app.api_state);
+}
+
+fn render_variables(app: &mut App, frame: &mut Frame, area: Rect) {
+    let editing = app.variable_edit_index;
+    let title = if let Some(i) = editing {
+        format!(
+            "Editing: {}",
+            app.variables.get(i).map(|(n, _)| n.as_str()).unwrap_or("")
+        )
+    } else {
+        "Variables (Enter to edit)".to_string()
+    };
+
+    let items: Vec<ListItem> = app
+        .variables
+        .iter()
+        .enumerate()
+        .map(|(i, (name, value))| {
+            let text = if editing == Some(i) {
+                format!("{}: {}", name, app.variable_edit_value)
+            } else {
+                format!("{} = {}", name, value)
+            };
+            ListItem::new(text)
+        })
+        .collect();
+
+    let focused = app.focus == Focus::Variables;
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(if focused {
+                    app.theme.focused
+                } else {
+                    app.theme.border
+                }),
+        )
+        .highlight_style(app.theme.highlight)
+        .highlight_symbol("> ");
+
+    frame.render_stateful_widget(list, area, &mut app.variable_state);
 }
 
 fn render_processes(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -474,6 +521,12 @@ fn help_lines(app: &App) -> Vec<String> {
                 lines.push("  /                     search APIs".to_string());
                 lines.push("  Esc                   clear search".to_string());
                 lines.push("  letter key            send API by keybinding".to_string());
+            }
+            Focus::Variables => {
+                lines.push("API - Variables:".to_string());
+                lines.push("  ↑/↓ or Ctrl+P/Ctrl+N  select variable".to_string());
+                lines.push("  Enter                 edit selected value".to_string());
+                lines.push("  Esc                   cancel edit".to_string());
             }
             Focus::Processes => {
                 lines.push("API - Requests:".to_string());

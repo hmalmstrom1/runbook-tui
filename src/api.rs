@@ -18,6 +18,38 @@ pub(crate) struct ApiItem {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<String>,
+    pub variables: Vec<(String, String)>,
+}
+
+impl ApiItem {
+    pub(crate) fn apply_variables(&mut self) {
+        let vars = self.variables.clone();
+        self.url = substitute_variables(&self.url, &vars);
+        self.method = substitute_variables(&self.method, &vars);
+        for (_, value) in &mut self.headers {
+            *value = substitute_variables(value, &vars);
+        }
+        if let Some(body) = &mut self.body {
+            *body = substitute_variables(body, &vars);
+        }
+    }
+}
+
+fn substitute_variables(text: &str, variables: &[(String, String)]) -> String {
+    let mut result = text.to_string();
+    for (key, value) in variables {
+        let mut placeholder = String::from("{{");
+        placeholder.push_str(key);
+        placeholder.push_str("}}");
+        result = result.replace(&placeholder, value);
+    }
+    result
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ParsedCollection {
+    pub(crate) apis: Vec<ApiItem>,
+    pub(crate) variables: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,7 +117,15 @@ impl ApiRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct PostmanVariable {
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct PostmanCollection {
+    #[serde(default)]
+    variable: Vec<PostmanVariable>,
     item: Vec<PostmanItem>,
 }
 
@@ -148,7 +188,12 @@ fn url_string(url: Option<PostmanUrl>) -> String {
     }
 }
 
-fn extract_item(prefix: &str, item: PostmanItem, apis: &mut Vec<ApiItem>) {
+fn extract_item(
+    prefix: &str,
+    item: PostmanItem,
+    variables: &[(String, String)],
+    apis: &mut Vec<ApiItem>,
+) {
     let name = if prefix.is_empty() {
         item.name
     } else {
@@ -157,7 +202,7 @@ fn extract_item(prefix: &str, item: PostmanItem, apis: &mut Vec<ApiItem>) {
 
     if !item.item.is_empty() {
         for child in item.item {
-            extract_item(&name, child, apis);
+            extract_item(&name, child, variables, apis);
         }
         return;
     }
@@ -172,6 +217,7 @@ fn extract_item(prefix: &str, item: PostmanItem, apis: &mut Vec<ApiItem>) {
                     url,
                     headers: Vec::new(),
                     body: None,
+                    variables: variables.to_vec(),
                 });
             }
             PostmanRequest::Object(obj) => {
@@ -201,6 +247,7 @@ fn extract_item(prefix: &str, item: PostmanItem, apis: &mut Vec<ApiItem>) {
                     url,
                     headers,
                     body,
+                    variables: variables.to_vec(),
                 });
             }
         }
@@ -236,15 +283,21 @@ pub(crate) fn format_body(body: &str, content_type: Option<&str>) -> String {
     body.to_string()
 }
 
-pub(crate) fn parse_collection(path: &Path) -> Result<Vec<ApiItem>> {
+pub(crate) fn parse_collection(path: &Path) -> Result<ParsedCollection> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read collection {}", path.display()))?;
     let collection: PostmanCollection = serde_json::from_str(&content)
         .with_context(|| "Failed to parse collection as JSON")?;
 
+    let variables: Vec<(String, String)> = collection
+        .variable
+        .into_iter()
+        .map(|v| (v.key, v.value))
+        .collect();
+
     let mut apis = Vec::new();
     for item in collection.item {
-        extract_item("", item, &mut apis);
+        extract_item("", item, &variables, &mut apis);
     }
 
     let keys: Vec<char> = ('a'..='z').chain('A'..='Z').chain('0'..='9').collect();
@@ -254,7 +307,7 @@ pub(crate) fn parse_collection(path: &Path) -> Result<Vec<ApiItem>> {
         }
     }
 
-    Ok(apis)
+    Ok(ParsedCollection { apis, variables })
 }
 
 pub(crate) async fn run_api_request(

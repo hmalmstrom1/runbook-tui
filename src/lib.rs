@@ -58,8 +58,8 @@ pub async fn run() -> Result<()> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
     let mut app = if force_api || path.extension().and_then(|e| e.to_str()) == Some("json") {
-        let apis = parse_collection(&path)?;
-        App::new_api(apis, client)
+        let parsed = parse_collection(&path)?;
+        App::new_api(parsed.apis, client, parsed.variables)
     } else {
         let commands = read_config(&path)?;
         App::new(commands, client)

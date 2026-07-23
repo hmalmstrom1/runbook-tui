@@ -69,6 +69,7 @@ pub(crate) enum InputMode {
     Normal,
     Search,
     Import,
+    VariableEdit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +79,7 @@ pub(crate) enum Focus {
     Output,
     RequestBody,
     ResponseBody,
+    Variables,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +130,10 @@ pub(crate) struct App {
     pub(crate) show_help: bool,
     pub(crate) quit: bool,
     pub(crate) theme: Theme,
+    pub(crate) variables: Vec<(String, String)>,
+    pub(crate) variable_state: ListState,
+    pub(crate) variable_edit_index: Option<usize>,
+    pub(crate) variable_edit_value: String,
 }
 
 impl App {
@@ -167,12 +173,20 @@ impl App {
             show_help: false,
             quit: false,
             theme: Theme::default(),
+            variables: Vec::new(),
+            variable_state: ListState::default(),
+            variable_edit_index: None,
+            variable_edit_value: String::new(),
         };
         app.update_filtered();
         app
     }
 
-    pub(crate) fn new_api(apis: Vec<ApiItem>, client: reqwest::Client) -> Self {
+    pub(crate) fn new_api(
+        apis: Vec<ApiItem>,
+        client: reqwest::Client,
+        variables: Vec<(String, String)>,
+    ) -> Self {
         let mut app = Self {
             app_mode: AppMode::Api,
             client,
@@ -208,8 +222,13 @@ impl App {
             show_help: false,
             quit: false,
             theme: Theme::default(),
+            variables,
+            variable_state: ListState::default(),
+            variable_edit_index: None,
+            variable_edit_value: String::new(),
         };
         app.update_filtered();
+        app.variable_state.select(Some(0));
         app
     }
 
@@ -277,6 +296,55 @@ impl App {
                 .unwrap_or(self.filtered_apis.len() - 1);
             self.api_state.select(Some(self.selected_api));
         }
+    }
+
+    pub(crate) fn select_next_variable(&mut self) {
+        if !self.variables.is_empty() {
+            let i = self.variable_state.selected().unwrap_or(0);
+            let next = (i + 1) % self.variables.len();
+            self.variable_state.select(Some(next));
+        }
+    }
+
+    pub(crate) fn select_prev_variable(&mut self) {
+        if !self.variables.is_empty() {
+            let i = self.variable_state.selected().unwrap_or(0);
+            let prev = i.checked_sub(1).unwrap_or(self.variables.len() - 1);
+            self.variable_state.select(Some(prev));
+        }
+    }
+
+    pub(crate) fn start_variable_edit(&mut self) {
+        if let Some(i) = self.variable_state.selected()
+            && let Some((_, value)) = self.variables.get(i)
+        {
+            self.variable_edit_index = Some(i);
+            self.variable_edit_value = value.clone();
+            self.input_mode = InputMode::VariableEdit;
+        }
+    }
+
+    pub(crate) fn confirm_variable_edit(&mut self) {
+        if let Some(i) = self.variable_edit_index
+            && let Some(entry) = self.variables.get_mut(i)
+        {
+            entry.1 = self.variable_edit_value.clone();
+        }
+        self.cancel_variable_edit();
+    }
+
+    pub(crate) fn cancel_variable_edit(&mut self) {
+        self.variable_edit_index = None;
+        self.variable_edit_value.clear();
+        self.input_mode = InputMode::Normal;
+    }
+
+    pub(crate) fn variable_edit_push(&mut self, c: char) {
+        self.variable_edit_value.push(c);
+    }
+
+    pub(crate) fn variable_edit_pop(&mut self) {
+        self.variable_edit_value.pop();
     }
 
     pub(crate) fn select_next_process(&mut self) {
@@ -452,9 +520,9 @@ impl App {
     pub(crate) fn confirm_import(&mut self) {
         let path = self.import_path.clone();
         let result = if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            api::parse_collection(&path).map(|apis| {
+            api::parse_collection(&path).map(|parsed| {
                 let client = self.client.clone();
-                *self = Self::new_api(apis, client);
+                *self = Self::new_api(parsed.apis, client, parsed.variables);
             })
         } else {
             read_config(&path).map(|commands| {
@@ -522,17 +590,13 @@ impl App {
     }
 
     pub(crate) fn cycle_focus(&mut self) {
+        self.input_mode = InputMode::Normal;
         self.focus = match (self.app_mode, self.focus) {
-            (AppMode::Runbook, Focus::Commands) => {
-                self.input_mode = InputMode::Normal;
-                Focus::Processes
-            }
+            (AppMode::Runbook, Focus::Commands) => Focus::Processes,
             (AppMode::Runbook, Focus::Processes) => Focus::Output,
             (AppMode::Runbook, Focus::Output) => Focus::Commands,
-            (AppMode::Api, Focus::Commands) => {
-                self.input_mode = InputMode::Normal;
-                Focus::Processes
-            }
+            (AppMode::Api, Focus::Commands) => Focus::Variables,
+            (AppMode::Api, Focus::Variables) => Focus::Processes,
             (AppMode::Api, Focus::Processes) => Focus::RequestBody,
             (AppMode::Api, Focus::RequestBody) => Focus::ResponseBody,
             (AppMode::Api, Focus::ResponseBody) => Focus::Commands,
@@ -584,7 +648,9 @@ impl App {
     }
 
     pub(crate) fn spawn_api(&mut self, api_idx: usize, tx: UnboundedSender<AppEvent>) {
-        let item = self.apis[api_idx].clone();
+        let mut item = self.apis[api_idx].clone();
+        item.variables = self.variables.clone();
+        item.apply_variables();
         let id = self.id_counter;
         self.id_counter += 1;
         let request_headers = item
@@ -782,6 +848,18 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
         }
         return;
     }
+    if app.input_mode == InputMode::VariableEdit {
+        match key.code {
+            KeyCode::Enter => app.confirm_variable_edit(),
+            KeyCode::Esc => app.cancel_variable_edit(),
+            KeyCode::Char(c) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                app.variable_edit_push(c);
+            }
+            KeyCode::Backspace => app.variable_edit_pop(),
+            _ => {}
+        }
+        return;
+    }
     if key.code == KeyCode::Tab {
         app.cycle_focus();
         return;
@@ -803,10 +881,26 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
         (AppMode::Runbook, Focus::Commands) => handle_commands_key(app, key, tx),
         (AppMode::Runbook, Focus::Processes) => handle_processes_key(app, key),
         (AppMode::Api, Focus::Commands) => handle_apis_key(app, key, tx),
+        (AppMode::Api, Focus::Variables) => handle_variables_key(app, key),
         (AppMode::Api, Focus::Processes) => handle_requests_key(app, key),
         (AppMode::Api, Focus::RequestBody) => handle_request_body_key(app, key),
         (AppMode::Api, Focus::ResponseBody) => handle_output_key(app, key),
         (_, Focus::Output) => handle_output_key(app, key),
+        _ => {}
+    }
+}
+
+fn handle_variables_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Up => app.select_prev_variable(),
+        KeyCode::Down => app.select_next_variable(),
+        KeyCode::Enter => app.start_variable_edit(),
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.select_next_variable();
+        }
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.select_prev_variable();
+        }
         _ => {}
     }
 }
@@ -816,6 +910,7 @@ pub(crate) fn handle_ctrl_n(app: &mut App) {
         (AppMode::Runbook, Focus::Commands) => app.select_next_command(),
         (AppMode::Runbook, Focus::Processes) => app.select_next_process(),
         (AppMode::Api, Focus::Commands) => app.select_next_api(),
+        (AppMode::Api, Focus::Variables) => app.select_next_variable(),
         (AppMode::Api, Focus::Processes) => app.select_next_request(),
         (AppMode::Api, Focus::RequestBody) => app.scroll_request_body_down(1),
         (AppMode::Api, Focus::ResponseBody) | (_, Focus::Output) => app.scroll_log_down(1),
@@ -828,6 +923,7 @@ pub(crate) fn handle_ctrl_p(app: &mut App) {
         (AppMode::Runbook, Focus::Commands) => app.select_prev_command(),
         (AppMode::Runbook, Focus::Processes) => app.select_prev_process(),
         (AppMode::Api, Focus::Commands) => app.select_prev_api(),
+        (AppMode::Api, Focus::Variables) => app.select_prev_variable(),
         (AppMode::Api, Focus::Processes) => app.select_prev_request(),
         (AppMode::Api, Focus::RequestBody) => app.scroll_request_body_up(1),
         (AppMode::Api, Focus::ResponseBody) | (_, Focus::Output) => app.scroll_log_up(1),

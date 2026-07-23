@@ -1,0 +1,49 @@
+{
+  "info": {
+    "name": "Variables Test"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://httpbin.org",
+      "type": "string"
+    },
+    {
+      "key": "greeting",
+      "value": "Hello",
+      "type": "string"
+    },
+    {
+      "key": "name",
+      "value": "runbook-tui",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Get IP via variable",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/get",
+        "header": []
+      }
+    },
+    {
+      "name": "Post JSON with variables",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/post",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"message\":\"{{greeting}} {{name}}!\"}"
+        }
+      }
+    }
+  ]
+}
