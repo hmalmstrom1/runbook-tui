@@ -37,7 +37,7 @@ Requires a Rust toolchain (https://rustup.rs/):
 cargo build --release
 ```
 
-The binary is written to `target/release/runbook-tui`.
+The binary is written to `target/release/rbt`.
 
 ## Usage
 
@@ -70,9 +70,9 @@ command = "for i in 1 2 3 4 5; do date; sleep 1; done"
 Run it:
 
 ```bash
-./target/release/runbook-tui
+./target/release/rbt
 # or with an explicit path:
-./target/release/runbook-tui /path/to/runbook.toml
+./target/release/rbt /path/to/runbook.toml
 ```
 
 ### API mode
@@ -112,7 +112,7 @@ Create or export a Postman collection as JSON. The file must contain an `item` a
 Run it with `--api`:
 
 ```bash
-./target/release/runbook-tui --api test_collection.json
+./target/release/rbt --api test_collection.json
 ```
 
 ### Variables in API collections
@@ -149,8 +149,17 @@ Postman-style variables defined at the collection level are substituted in the `
 Run it with `--api`:
 
 ```bash
-./target/release/runbook-tui --api test_collection_variables.json
+./target/release/rbt --api test_collection_variables.json
 ```
+
+### Exporting output
+
+Press `Ctrl+E` to export the output of the currently selected process or API request to a text file in the current directory.
+
+- **Runbook mode**: the file contains the command and its full output.
+- **API mode**: the file contains the formatted request (`METHOD URL`, headers, body) and the full response (status, headers, body).
+
+Exported files are named `rbt-export-runbook-<timestamp>.txt` or `rbt-export-api-<timestamp>.txt`.
 
 ## Keybindings
 
@@ -159,7 +168,10 @@ Run it with `--api`:
 | Key | Action |
 | --- | --- |
 | `?` | Toggle help overlay |
-| `Tab` | Cycle focus between panes |
+| `Tab` | Cycle focus forward |
+| `Shift+Tab` | Cycle focus backward |
+| `m` | Maximize / restore the focused pane |
+| `Ctrl+E` | Export selected output to a file |
 | `Ctrl+O` | Open the file import dialog |
 | `Ctrl+C` | Quit |
 | `Ctrl+N` | Move down / next |

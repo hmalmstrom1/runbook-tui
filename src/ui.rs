@@ -55,31 +55,36 @@ pub(crate) fn install_panic_hook() {
 
 pub(crate) fn ui(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
-    let main_layout = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).spacing(1);
-    let [left_area, right_area] = area.layout(&main_layout);
 
-    let left_layout = Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).spacing(1);
-    let [search_area, list_area] = left_area.layout(&left_layout);
+    if let Some(focus) = app.zoom {
+        render_zoomed(app, frame, area, focus);
+    } else {
+        let main_layout = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).spacing(1);
+        let [left_area, right_area] = area.layout(&main_layout);
 
-    let right_layout = Layout::vertical([Constraint::Percentage(35), Constraint::Percentage(65)]).spacing(1);
-    let [history_area, output_area] = right_area.layout(&right_layout);
+        let left_layout = Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).spacing(1);
+        let [search_area, list_area] = left_area.layout(&left_layout);
 
-    render_search(app, frame, search_area);
+        let right_layout = Layout::vertical([Constraint::Percentage(35), Constraint::Percentage(65)]).spacing(1);
+        let [history_area, output_area] = right_area.layout(&right_layout);
 
-    match app.app_mode {
-        AppMode::Runbook => {
-            render_commands(app, frame, list_area);
-            render_processes(app, frame, history_area);
-            render_log(app, frame, output_area);
-        }
-        AppMode::Api => {
-            let vars_height = (app.variables.len() as u16 + 2).clamp(4, 8);
-            let api_layout = Layout::vertical([Constraint::Fill(1), Constraint::Length(vars_height)]).spacing(1);
-            let [api_area, variables_area] = list_area.layout(&api_layout);
-            render_apis(app, frame, api_area);
-            render_variables(app, frame, variables_area);
-            render_requests(app, frame, history_area);
-            render_api_response(app, frame, output_area);
+        render_search(app, frame, search_area);
+
+        match app.app_mode {
+            AppMode::Runbook => {
+                render_commands(app, frame, list_area);
+                render_processes(app, frame, history_area);
+                render_log(app, frame, output_area);
+            }
+            AppMode::Api => {
+                let vars_height = (app.variables.len() as u16 + 2).clamp(4, 8);
+                let api_layout = Layout::vertical([Constraint::Fill(1), Constraint::Length(vars_height)]).spacing(1);
+                let [api_area, variables_area] = list_area.layout(&api_layout);
+                render_apis(app, frame, api_area);
+                render_variables(app, frame, variables_area);
+                render_requests(app, frame, history_area);
+                render_api_response(app, frame, output_area);
+            }
         }
     }
 
@@ -90,6 +95,50 @@ pub(crate) fn ui(app: &mut App, frame: &mut Frame) {
     if app.show_help {
         render_help(app, frame, area);
     }
+
+    render_message(app, frame, area);
+}
+
+fn render_message(app: &App, frame: &mut Frame, area: Rect) {
+    if app.message.is_empty() {
+        return;
+    }
+    let text_width = app.message.chars().count() as u16;
+    let width = (text_width + 4).clamp(20, area.width.saturating_sub(4));
+    let height = 3.min(area.height);
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+
+    frame.render_widget(Clear, popup);
+    let style = if app.message.starts_with("Export failed") {
+        app.theme.error
+    } else {
+        app.theme.success
+    };
+    let paragraph = Paragraph::new(app.message.as_str())
+        .block(Block::default().borders(Borders::ALL).border_style(style))
+        .style(style);
+    frame.render_widget(paragraph, popup);
+}
+
+fn render_zoomed(app: &mut App, frame: &mut Frame, area: Rect, focus: Focus) {
+    frame.render_widget(Clear, area);
+    match (app.app_mode, focus) {
+        (AppMode::Runbook, Focus::Commands) => render_commands(app, frame, area),
+        (AppMode::Runbook, Focus::Processes) => render_processes(app, frame, area),
+        (AppMode::Runbook, Focus::Output) => render_log(app, frame, area),
+        (AppMode::Api, Focus::Commands) => render_apis(app, frame, area),
+        (AppMode::Api, Focus::Variables) => render_variables(app, frame, area),
+        (AppMode::Api, Focus::Processes) => render_requests(app, frame, area),
+        (AppMode::Api, Focus::RequestBody) | (AppMode::Api, Focus::ResponseBody) => {
+            render_api_response(app, frame, area);
+        }
+        _ => {}
+    }
 }
 
 fn render_search(app: &App, frame: &mut Frame, area: Rect) {
@@ -98,8 +147,8 @@ fn render_search(app: &App, frame: &mut Frame, area: Rect) {
     }
     let search_focused = app.focus == Focus::Commands && app.input_mode == InputMode::Search;
     let hint = match app.app_mode {
-        AppMode::Runbook => "Type / to search, Enter to run, Ctrl+O open file, Tab panes, PgUp/Dn scroll output",
-        AppMode::Api => "Type / to search APIs, Enter to send/edit, Ctrl+O open file, Tab panes, PgUp/Dn scroll body",
+        AppMode::Runbook => "Type / to search, Enter to run, Ctrl+E export, Ctrl+O open file, Tab/Shift-Tab panes, PgUp/Dn scroll output",
+        AppMode::Api => "Type / to search APIs, Enter to send/edit, Ctrl+E export, Ctrl+O open file, Tab/Shift-Tab panes, PgUp/Dn scroll body",
     };
     let text = if app.search.is_empty() { hint } else { &app.search };
     let style = if search_focused { app.theme.input } else { app.theme.border };
@@ -480,12 +529,15 @@ fn render_api_response(app: &mut App, frame: &mut Frame, area: Rect) {
 fn help_lines(app: &App) -> Vec<String> {
     let mut lines = vec![
         "Global:".to_string(),
-        "  ?          toggle this help".to_string(),
-        "  Tab        cycle focus".to_string(),
-        "  Ctrl+O     open file".to_string(),
-        "  Ctrl+C     quit".to_string(),
-        "  Ctrl+N     move down / next".to_string(),
-        "  Ctrl+P     move up / previous".to_string(),
+        "  ?            toggle this help".to_string(),
+        "  Tab          cycle focus forward".to_string(),
+        "  Shift+Tab    cycle focus backward".to_string(),
+        "  m            maximize / restore focused pane".to_string(),
+        "  Ctrl+E       export selected output".to_string(),
+        "  Ctrl+O       open file".to_string(),
+        "  Ctrl+C       quit".to_string(),
+        "  Ctrl+N       move down / next".to_string(),
+        "  Ctrl+P       move up / previous".to_string(),
         "".to_string(),
     ];
 

@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
@@ -134,6 +134,9 @@ pub(crate) struct App {
     pub(crate) variable_state: ListState,
     pub(crate) variable_edit_index: Option<usize>,
     pub(crate) variable_edit_value: String,
+    pub(crate) zoom: Option<Focus>,
+    pub(crate) message: String,
+    pub(crate) message_until: Option<Instant>,
 }
 
 impl App {
@@ -177,6 +180,9 @@ impl App {
             variable_state: ListState::default(),
             variable_edit_index: None,
             variable_edit_value: String::new(),
+            zoom: None,
+            message: String::new(),
+            message_until: None,
         };
         app.update_filtered();
         app
@@ -226,6 +232,9 @@ impl App {
             variable_state: ListState::default(),
             variable_edit_index: None,
             variable_edit_value: String::new(),
+            zoom: None,
+            message: String::new(),
+            message_until: None,
         };
         app.update_filtered();
         app.variable_state.select(Some(0));
@@ -345,6 +354,99 @@ impl App {
 
     pub(crate) fn variable_edit_pop(&mut self) {
         self.variable_edit_value.pop();
+    }
+
+    pub(crate) fn toggle_zoom(&mut self) {
+        self.zoom = if self.zoom == Some(self.focus) {
+            None
+        } else {
+            Some(self.focus)
+        };
+    }
+
+    pub(crate) fn set_message(&mut self, message: impl Into<String>) {
+        self.message = message.into();
+        self.message_until = Some(Instant::now() + Duration::from_secs(5));
+    }
+
+    pub(crate) fn clear_message(&mut self) {
+        self.message.clear();
+        self.message_until = None;
+    }
+
+    fn export_timestamp(&self) -> u128 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    }
+
+    pub(crate) fn export_output(&mut self) {
+        let result = match self.app_mode {
+            AppMode::Runbook => self.export_runbook_output(),
+            AppMode::Api => self.export_api_output(),
+        };
+        match result {
+            Ok(path) => self.set_message(format!("Exported to {}", path.display())),
+            Err(e) => self.set_message(format!("Export failed: {}", e)),
+        }
+    }
+
+    fn export_runbook_output(&mut self) -> std::io::Result<PathBuf> {
+        let process = self
+            .selected_process()
+            .ok_or_else(|| std::io::Error::other("No process selected"))?;
+        let timestamp = self.export_timestamp();
+        let filename = format!("rbt-export-runbook-{}.txt", timestamp);
+        let path = env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(&filename);
+
+        let output = process.output.iter().cloned().collect::<Vec<_>>().join("\n");
+        let content = format!("Command: {}\n\nOutput:\n{}", process._command, output);
+        fs::write(&path, content)?;
+        Ok(path)
+    }
+
+    fn export_api_output(&mut self) -> std::io::Result<PathBuf> {
+        let request = self
+            .selected_request()
+            .ok_or_else(|| std::io::Error::other("No request selected"))?;
+        let timestamp = self.export_timestamp();
+        let filename = format!("rbt-export-api-{}.txt", timestamp);
+        let path = env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(&filename);
+
+        let request_body = request.request_body.iter().cloned().collect::<Vec<_>>().join("\n");
+        let response_body = request.body.iter().cloned().collect::<Vec<_>>().join("\n");
+        let status_line = match &request.status {
+            ApiStatus::Done(_) => String::new(),
+            ApiStatus::Running => "Running".to_string(),
+            ApiStatus::Failed(e) => format!("Failed: {}", e),
+        };
+        let response_headers = request.headers.clone();
+
+        let content = if status_line.is_empty() {
+            format!(
+                "Request\n=======\n{} {}\n\n{}\n\n{}\n\nResponse\n========\n{}\n\n{}",
+                request.method,
+                request.url,
+                request.request_headers,
+                request_body,
+                response_headers,
+                response_body
+            )
+        } else {
+            format!(
+                "Request\n=======\n{} {}\n\n{}\n\n{}\n\nResponse\n========\n{}\n\n{}\n\n{}",
+                request.method,
+                request.url,
+                request.request_headers,
+                request_body,
+                status_line,
+                response_headers,
+                response_body
+            )
+        };
+        fs::write(&path, content)?;
+        Ok(path)
     }
 
     pub(crate) fn select_next_process(&mut self) {
@@ -589,17 +691,26 @@ impl App {
         }
     }
 
-    pub(crate) fn cycle_focus(&mut self) {
+    pub(crate) fn cycle_focus(&mut self, forward: bool) {
         self.input_mode = InputMode::Normal;
-        self.focus = match (self.app_mode, self.focus) {
-            (AppMode::Runbook, Focus::Commands) => Focus::Processes,
-            (AppMode::Runbook, Focus::Processes) => Focus::Output,
-            (AppMode::Runbook, Focus::Output) => Focus::Commands,
-            (AppMode::Api, Focus::Commands) => Focus::Variables,
-            (AppMode::Api, Focus::Variables) => Focus::Processes,
-            (AppMode::Api, Focus::Processes) => Focus::RequestBody,
-            (AppMode::Api, Focus::RequestBody) => Focus::ResponseBody,
-            (AppMode::Api, Focus::ResponseBody) => Focus::Commands,
+        self.zoom = None;
+        self.focus = match (self.app_mode, self.focus, forward) {
+            (AppMode::Runbook, Focus::Commands, true) => Focus::Processes,
+            (AppMode::Runbook, Focus::Processes, true) => Focus::Output,
+            (AppMode::Runbook, Focus::Output, true) => Focus::Commands,
+            (AppMode::Runbook, Focus::Commands, false) => Focus::Output,
+            (AppMode::Runbook, Focus::Output, false) => Focus::Processes,
+            (AppMode::Runbook, Focus::Processes, false) => Focus::Commands,
+            (AppMode::Api, Focus::Commands, true) => Focus::Variables,
+            (AppMode::Api, Focus::Variables, true) => Focus::Processes,
+            (AppMode::Api, Focus::Processes, true) => Focus::RequestBody,
+            (AppMode::Api, Focus::RequestBody, true) => Focus::ResponseBody,
+            (AppMode::Api, Focus::ResponseBody, true) => Focus::Commands,
+            (AppMode::Api, Focus::Commands, false) => Focus::ResponseBody,
+            (AppMode::Api, Focus::ResponseBody, false) => Focus::RequestBody,
+            (AppMode::Api, Focus::RequestBody, false) => Focus::Processes,
+            (AppMode::Api, Focus::Processes, false) => Focus::Variables,
+            (AppMode::Api, Focus::Variables, false) => Focus::Commands,
             _ => Focus::Commands,
         };
         if self.focus == Focus::Processes {
@@ -804,7 +915,13 @@ pub(crate) fn read_input(running: Arc<AtomicBool>, tx: UnboundedSender<AppEvent>
 
 pub(crate) fn handle_event(app: &mut App, event: AppEvent, tx: UnboundedSender<AppEvent>) {
     match event {
-        AppEvent::Tick => {}
+        AppEvent::Tick => {
+            if let Some(until) = app.message_until
+                && Instant::now() >= until
+            {
+                app.clear_message();
+            }
+        }
         AppEvent::Input(Event::Key(key)) => handle_key(app, key, tx),
         AppEvent::Input(_) => {}
         AppEvent::ProcessLine { id, line } => app.push_process_line(id, line),
@@ -860,8 +977,25 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
         }
         return;
     }
+    if key.code == KeyCode::Char('m')
+        && app.input_mode == InputMode::Normal
+        && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        app.toggle_zoom();
+        return;
+    }
+    if key.code == KeyCode::BackTab
+        || (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT))
+    {
+        app.cycle_focus(false);
+        return;
+    }
     if key.code == KeyCode::Tab {
-        app.cycle_focus();
+        app.cycle_focus(true);
+        return;
+    }
+    if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.export_output();
         return;
     }
     if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
