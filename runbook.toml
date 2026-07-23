@@ -1,0 +1,24 @@
+[[commands]]
+title = "Ping localhost"
+keybinding = "p"
+command = "ping -c 3 127.0.0.1"
+
+[[commands]]
+title = "List files"
+keybinding = "l"
+command = "ls -la"
+
+[[commands]]
+title = "Failing command"
+keybinding = "f"
+command = "false"
+
+[[commands]]
+title = "Print date loop"
+keybinding = "d"
+command = "for i in 1 2 3 4 5; do date; sleep 1; done"
+
+[[commands]]
+title = "Long output"
+keybinding = "o"
+command = "seq 1 100"

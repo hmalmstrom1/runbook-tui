@@ -1,0 +1,37 @@
+{
+  "info": {
+    "name": "Test Collection"
+  },
+  "item": [
+    {
+      "name": "Get IP",
+      "request": {
+        "method": "GET",
+        "url": "https://httpbin.org/get",
+        "header": []
+      }
+    },
+    {
+      "name": "Post JSON",
+      "request": {
+        "method": "POST",
+        "url": "https://httpbin.org/post",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"hello\":\"world\"}"
+        }
+      }
+    },
+    {
+      "name": "Not Found",
+      "request": {
+        "method": "GET",
+        "url": "https://httpbin.org/status/404",
+        "header": []
+      }
+    }
+  ]
+}
