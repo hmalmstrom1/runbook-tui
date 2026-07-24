@@ -10,7 +10,7 @@ use ratatui::buffer::CellWidth;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs};
 use ratatui::{Frame, Terminal};
 use unicode_width::UnicodeWidthChar;
 
@@ -56,11 +56,20 @@ pub(crate) fn install_panic_hook() {
 pub(crate) fn ui(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
 
+    let main_area = if app.tab_titles.len() > 1 {
+        let layout = Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).spacing(1);
+        let [tab_area, rest] = area.layout(&layout);
+        render_tabs(app, frame, tab_area);
+        rest
+    } else {
+        area
+    };
+
     if let Some(focus) = app.zoom {
-        render_zoomed(app, frame, area, focus);
+        render_zoomed(app, frame, main_area, focus);
     } else {
         let main_layout = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).spacing(1);
-        let [left_area, right_area] = area.layout(&main_layout);
+        let [left_area, right_area] = main_area.layout(&main_layout);
 
         let left_layout = Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).spacing(1);
         let [search_area, list_area] = left_area.layout(&left_layout);
@@ -98,6 +107,10 @@ pub(crate) fn ui(app: &mut App, frame: &mut Frame) {
 
     if app.input_mode == InputMode::EnvironmentSelect {
         render_environment_select(app, frame, area);
+    }
+
+    if app.input_mode == InputMode::TabSelect {
+        render_tab_select(app, frame, area);
     }
 
     render_message(app, frame, area);
@@ -258,6 +271,47 @@ fn render_environment_select(app: &mut App, frame: &mut Frame, area: Rect) {
         .highlight_style(app.theme.highlight)
         .highlight_symbol("> ");
     frame.render_stateful_widget(list, inner, &mut app.environment_state);
+}
+
+fn render_tabs(app: &App, frame: &mut Frame, area: Rect) {
+    let selected = app.tab_idx.min(app.tab_titles.len().saturating_sub(1));
+    let tabs = Tabs::new(app.tab_titles.clone())
+        .select(selected)
+        .block(Block::default().borders(Borders::ALL))
+        .style(app.theme.border)
+        .highlight_style(app.theme.highlight);
+    frame.render_widget(tabs, area);
+}
+
+fn render_tab_select(app: &mut App, frame: &mut Frame, area: Rect) {
+    let popup_width = (area.width * 3 / 5).max(30).min(area.width.saturating_sub(4));
+    let popup_height = ((app.tab_titles.len() as u16 + 2).clamp(5, area.height.saturating_sub(4))).min(area.height);
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
+        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title("Select Tab")
+        .borders(Borders::ALL)
+        .border_style(app.theme.focused);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let items: Vec<ListItem> = app
+        .tab_titles
+        .iter()
+        .map(|name| ListItem::new(name.clone()))
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::NONE))
+        .highlight_style(app.theme.highlight)
+        .highlight_symbol("> ");
+    frame.render_stateful_widget(list, inner, &mut app.tab_select_state);
 }
 
 fn render_commands(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -593,6 +647,11 @@ fn help_lines(app: &App) -> Vec<String> {
         "  Ctrl+E       export selected output".to_string(),
         "  Ctrl+G       switch API environment".to_string(),
         "  Ctrl+O       open file".to_string(),
+        "  F2           switch tab (or pick from list)".to_string(),
+        "  Ctrl+Left    previous tab".to_string(),
+        "  Ctrl+Right   next tab".to_string(),
+        "  F3           open file in new tab".to_string(),
+        "  Ctrl+T       cycle theme".to_string(),
         "  Ctrl+C       quit".to_string(),
         "  Ctrl+N       move down / next".to_string(),
         "  Ctrl+P       move up / previous".to_string(),

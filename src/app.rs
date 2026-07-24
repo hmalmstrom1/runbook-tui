@@ -71,6 +71,7 @@ pub(crate) enum InputMode {
     Import,
     VariableEdit,
     EnvironmentSelect,
+    TabSelect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +140,7 @@ pub(crate) struct App {
     pub(crate) show_help: bool,
     pub(crate) quit: bool,
     pub(crate) theme: Theme,
+    pub(crate) theme_name: String,
     pub(crate) collection_variables: Vec<(String, String)>,
     pub(crate) secret_keys: BTreeSet<String>,
     pub(crate) environments: Vec<(String, Vec<(String, String)>)>,
@@ -154,6 +156,11 @@ pub(crate) struct App {
     pub(crate) message: String,
     pub(crate) message_until: Option<Instant>,
     pub(crate) importing_env_group: bool,
+    pub(crate) importing_new_tab: bool,
+    pub(crate) tab_idx: usize,
+    pub(crate) tab_title: String,
+    pub(crate) tab_titles: Vec<String>,
+    pub(crate) tab_select_state: ListState,
 }
 
 impl App {
@@ -193,6 +200,7 @@ impl App {
             show_help: false,
             quit: false,
             theme: Theme::default(),
+            theme_name: "Default".to_string(),
             collection_variables: Vec::new(),
             secret_keys: BTreeSet::new(),
             environments: Vec::new(),
@@ -208,7 +216,16 @@ impl App {
             message: String::new(),
             message_until: None,
             importing_env_group: false,
+            importing_new_tab: false,
+            tab_idx: 0,
+            tab_title: String::new(),
+            tab_titles: Vec::new(),
+            tab_select_state: ListState::default(),
         };
+        if let Some(name) = crate::theme::load_saved_theme_name() {
+            app.theme = crate::theme::theme_by_name(&name);
+            app.theme_name = name;
+        }
         app.update_filtered();
         app
     }
@@ -256,6 +273,7 @@ impl App {
             show_help: false,
             quit: false,
             theme: Theme::default(),
+            theme_name: "Default".to_string(),
             collection_variables: variables,
             secret_keys,
             environments,
@@ -271,7 +289,16 @@ impl App {
             message: String::new(),
             message_until: None,
             importing_env_group: false,
+            importing_new_tab: false,
+            tab_idx: 0,
+            tab_title: String::new(),
+            tab_titles: Vec::new(),
+            tab_select_state: ListState::default(),
         };
+        if let Some(name) = crate::theme::load_saved_theme_name() {
+            app.theme = crate::theme::theme_by_name(&name);
+            app.theme_name = name;
+        }
         app.set_environment(selected_environment);
         app.update_filtered();
         app.variable_state.select(Some(0));
@@ -545,6 +572,21 @@ impl App {
         };
     }
 
+    pub(crate) fn cycle_theme(&mut self) {
+        let names = crate::theme::theme_names();
+        let current = names
+            .iter()
+            .position(|&n| n == self.theme_name)
+            .unwrap_or(0);
+        let next = (current + 1) % names.len();
+        self.theme_name = names[next].to_string();
+        self.theme = crate::theme::theme_by_name(names[next]);
+        match crate::theme::save_theme_name(&self.theme_name) {
+            Ok(()) => self.set_message(format!("Theme: {}", self.theme_name)),
+            Err(e) => self.set_message(format!("Theme changed, save failed: {}", e)),
+        }
+    }
+
     pub(crate) fn set_message(&mut self, message: impl Into<String>) {
         self.message = message.into();
         self.message_until = Some(Instant::now() + Duration::from_secs(5));
@@ -710,6 +752,41 @@ impl App {
         self.import_state.select(Some(0));
     }
 
+    pub(crate) fn start_new_tab_import(&mut self) {
+        self.input_mode = InputMode::Import;
+        self.importing_new_tab = true;
+        self.importing_env_group = false;
+        self.import_path = PathBuf::new();
+        self.import_filter.clear();
+        self.import_cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        self.import_message = "Select a file to open in a new tab".to_string();
+        self.import_error = false;
+        self.refresh_import_entries();
+        self.import_state.select(Some(0));
+    }
+
+    pub(crate) fn open_tab_select(&mut self, titles: Vec<String>) {
+        self.input_mode = InputMode::TabSelect;
+        self.tab_titles = titles;
+        self.tab_select_state.select(Some(self.tab_idx));
+    }
+
+    pub(crate) fn select_prev_tab(&mut self) {
+        if !self.tab_titles.is_empty() {
+            let i = self.tab_select_state.selected().unwrap_or(0);
+            let prev = i.checked_sub(1).unwrap_or(self.tab_titles.len() - 1);
+            self.tab_select_state.select(Some(prev));
+        }
+    }
+
+    pub(crate) fn select_next_tab(&mut self) {
+        if !self.tab_titles.is_empty() {
+            let i = self.tab_select_state.selected().unwrap_or(0);
+            let next = (i + 1) % self.tab_titles.len();
+            self.tab_select_state.select(Some(next));
+        }
+    }
+
     pub(crate) fn import_filter_push(&mut self, c: char) {
         self.import_filter.push(c);
         self.import_error = false;
@@ -797,7 +874,7 @@ impl App {
         }
     }
 
-    pub(crate) fn import_enter_selected(&mut self) {
+    pub(crate) fn import_enter_selected(&mut self, tx: &UnboundedSender<AppEvent>) {
         if let Some(idx) = self.import_state.selected()
             && let Some(entry) = self.import_entries.get(idx)
         {
@@ -808,13 +885,14 @@ impl App {
                 self.import_state.select(Some(0));
             } else {
                 self.import_path = entry.path.clone();
-                self.confirm_import();
+                self.confirm_import(tx);
             }
         }
     }
 
-    pub(crate) fn confirm_import(&mut self) {
+    pub(crate) fn confirm_import(&mut self, tx: &UnboundedSender<AppEvent>) {
         let path = self.import_path.clone();
+        let tab_idx = self.tab_idx;
         if self.importing_env_group {
             match crate::env::parse_variable_groups(&path) {
                 Ok(parsed) => {
@@ -834,7 +912,14 @@ impl App {
             }
             return;
         }
-        let result = if path.extension().and_then(|e| e.to_str()) == Some("json") {
+        if self.importing_new_tab {
+            let _ = tx.send(AppEvent::NewTabImport { path });
+            self.importing_new_tab = false;
+            self.input_mode = InputMode::Normal;
+            return;
+        }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let result = if ext == "json" || ext == "yaml" || ext == "yml" {
             api::parse_collection(&path).map(|parsed| {
                 let client = self.client.clone();
                 *self = Self::new_api(parsed.apis, client, parsed.variables, parsed.secret_keys, Vec::new(), None);
@@ -845,7 +930,11 @@ impl App {
                 *self = Self::new(commands, client);
             })
         };
-        if let Err(e) = result {
+        if result.is_ok() {
+            self.tab_idx = tab_idx;
+            self.tab_title = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string_lossy().to_string());
+            self.input_mode = InputMode::Normal;
+        } else if let Err(e) = result {
             self.import_message = format!("Error: {}", e);
             self.import_error = true;
         }
@@ -968,7 +1057,7 @@ impl App {
         self.log_state = ListState::default();
         self.log_follow = true;
 
-        tokio::spawn(run_process(id, shell, log_path, tx));
+        tokio::spawn(run_process(self.tab_idx, id, shell, log_path, tx));
     }
 
     pub(crate) fn spawn_api(&mut self, api_idx: usize, tx: UnboundedSender<AppEvent>) {
@@ -1027,7 +1116,7 @@ impl App {
         self.log_state = ListState::default();
         self.log_follow = true;
 
-        tokio::spawn(run_api_request(id, item, self.client.clone(), tx));
+        tokio::spawn(run_api_request(self.tab_idx, id, item, self.client.clone(), tx));
     }
 
     pub(crate) fn run_selected(&mut self, tx: UnboundedSender<AppEvent>) {
@@ -1114,11 +1203,13 @@ impl App {
 pub(crate) enum AppEvent {
     Tick,
     Input(Event),
-    ProcessLine { id: usize, line: String },
-    ProcessExit { id: usize, code: Option<i32> },
-    ProcessError { id: usize, error: String },
-    ApiResponse { id: usize, status: u16, headers: String, body: String },
-    ApiError { id: usize, error: String },
+    ProcessLine { tab: usize, id: usize, line: String },
+    ProcessExit { tab: usize, id: usize, code: Option<i32> },
+    ProcessError { tab: usize, id: usize, error: String },
+    ApiResponse { tab: usize, id: usize, status: u16, headers: String, body: String },
+    ApiError { tab: usize, id: usize, error: String },
+    SwitchTab { tab: usize },
+    NewTabImport { path: PathBuf },
 }
 
 pub(crate) fn read_input(running: Arc<AtomicBool>, tx: UnboundedSender<AppEvent>) {
@@ -1143,13 +1234,14 @@ pub(crate) fn handle_event(app: &mut App, event: AppEvent, tx: UnboundedSender<A
         }
         AppEvent::Input(Event::Key(key)) => handle_key(app, key, tx),
         AppEvent::Input(_) => {}
-        AppEvent::ProcessLine { id, line } => app.push_process_line(id, line),
-        AppEvent::ProcessExit { id, code } => app.set_process_exit(id, code),
-        AppEvent::ProcessError { id, error } => app.set_process_error(id, error),
-        AppEvent::ApiResponse { id, status, headers, body } => {
+        AppEvent::ProcessLine { id, line, .. } => app.push_process_line(id, line),
+        AppEvent::ProcessExit { id, code, .. } => app.set_process_exit(id, code),
+        AppEvent::ProcessError { id, error, .. } => app.set_process_error(id, error),
+        AppEvent::ApiResponse { id, status, headers, body, .. } => {
             app.push_api_response(id, status, headers, body);
         }
-        AppEvent::ApiError { id, error } => app.set_api_error(id, error),
+        AppEvent::ApiError { id, error, .. } => app.set_api_error(id, error),
+        AppEvent::SwitchTab { .. } | AppEvent::NewTabImport { .. } => {}
     }
 }
 
@@ -1179,9 +1271,10 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
             || (key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL))
         {
             app.importing_env_group = false;
+            app.importing_new_tab = false;
             app.input_mode = InputMode::Normal;
         } else {
-            handle_import_key(app, key);
+            handle_import_key(app, key, tx);
         }
         return;
     }
@@ -1208,6 +1301,23 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
             KeyCode::Down => app.select_next_environment(),
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => app.select_prev_environment(),
             KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => app.select_next_environment(),
+            _ => {}
+        }
+        return;
+    }
+    if app.input_mode == InputMode::TabSelect {
+        match key.code {
+            KeyCode::Enter => {
+                if let Some(i) = app.tab_select_state.selected() {
+                    let _ = tx.send(AppEvent::SwitchTab { tab: i });
+                }
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Esc => app.input_mode = InputMode::Normal,
+            KeyCode::Up => app.select_prev_tab(),
+            KeyCode::Down => app.select_next_tab(),
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => app.select_prev_tab(),
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => app.select_next_tab(),
             _ => {}
         }
         return;
@@ -1239,8 +1349,16 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
         }
         return;
     }
+    if key.code == KeyCode::F(3) {
+        app.start_new_tab_import();
+        return;
+    }
     if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
         app.start_import();
+        return;
+    }
+    if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.cycle_theme();
         return;
     }
     if key.code == KeyCode::Char('n') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -1406,10 +1524,10 @@ pub(crate) fn handle_output_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-pub(crate) fn handle_import_key(app: &mut App, key: KeyEvent) {
+pub(crate) fn handle_import_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEvent>) {
     match key.code {
         KeyCode::Esc => app.input_mode = InputMode::Normal,
-        KeyCode::Enter => app.import_enter_selected(),
+        KeyCode::Enter => app.import_enter_selected(&tx),
         KeyCode::Up => app.select_prev_import_entry(),
         KeyCode::Down => app.select_next_import_entry(),
         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {

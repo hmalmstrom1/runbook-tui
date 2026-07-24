@@ -5,7 +5,7 @@ A terminal user interface for running commands and HTTP requests from structured
 `runbook-tui` can operate in two modes:
 
 - **Runbook mode**: Load a TOML file of shell commands and run them interactively.
-- **API mode**: Load a Postman-style JSON collection and send HTTP requests interactively.
+- **API mode**: Load a Postman collection or an OpenAPI 3.x spec (JSON or YAML) and send HTTP requests interactively.
 
 It is built with [ratatui](https://github.com/ratatui/ratatui) and [tokio](https://tokio.rs/) for an async, keyboard-driven terminal experience.
 
@@ -26,6 +26,7 @@ It is built with [ratatui](https://github.com/ratatui/ratatui) and [tokio](https
 - Per-command keybindings and per-API auto-assigned letter keys.
 - Built-in help overlay (`?`).
 - File import dialog (`Ctrl+O`) for switching runbooks or API collections without leaving the TUI.
+- Multiple tabs: open several runbooks or API collections at once, switch with `F2`, and open new tabs with `F3`.
 - In API mode, request and response bodies are pretty-printed and colorized based on `Content-Type` (`application/json`, `application/xml`, `text/html`).
 - Panic-safe terminal restoration via a RAII `TerminalGuard` and a custom panic hook.
 
@@ -73,11 +74,13 @@ Run it:
 ./target/release/rbt
 # or with an explicit path:
 ./target/release/rbt /path/to/runbook.toml
+# multiple files open as tabs:
+./target/release/rbt runbook1.toml runbook2.toml
 ```
 
 ### API mode
 
-Create or export a Postman collection as JSON. The file must contain an `item` array with `request` objects:
+Create or export a Postman collection as JSON, or write an OpenAPI 3.x spec in JSON or YAML. Postman files must contain an `item` array with `request` objects. OpenAPI files must contain `openapi` and `paths`:
 
 ```json
 {
@@ -115,11 +118,26 @@ Run it with `--api`:
 ./target/release/rbt --api test_collection.json
 ```
 
+OpenAPI specs work the same way, including `.yaml` and `.yml` files:
+
+```bash
+./target/release/rbt --api test_openapi.yaml
+```
+
+Multiple collections or runbooks can be opened as tabs:
+
+```bash
+./target/release/rbt --api test_collection.json runbook.toml
+./target/release/rbt runbook1.toml runbook2.toml
+```
+
 ### Variables in API collections
 
-Postman-style variables defined at the collection level are substituted in the `url`, header `value`, and request `body` before a request is sent. Use the `{{variable_name}}` syntax. In API mode the lower-left Variables pane shows the current values; press `Tab` to focus it and `Enter` on a variable to edit its value for the current session.
+Variables defined at the collection level are substituted in the `url`, header `value`, and request `body` before a request is sent. Use the `{{variable_name}}` syntax. In API mode the lower-left Variables pane shows the current values; press `Tab` to focus it and `Enter` on a variable to edit its value for the current session.
 
-Variables with `"type": "secret"` have their values masked as `********` in the variables pane. When editing a secret variable the value is also hidden; press `m` while editing to toggle the mask off and on.
+Postman variables with `"type": "secret"` are masked. OpenAPI `securitySchemes` with `type: apiKey` are also treated as secrets, so their values are masked and can be edited in the Variables pane.
+
+Variables with secret values are masked as `********` in the variables pane. When editing a secret variable the value is also hidden; press `m` while editing to toggle the mask off and on.
 
 ```json
 {
@@ -194,6 +212,23 @@ You can also switch environments at runtime by pressing `Ctrl+G` in API mode. Th
 
 The env overlay applies your current shell environment variables on top of whichever environment is selected. Matching supports the variable name, its uppercase form, and its `SCREAMING_SNAKE_CASE` form (so `baseUrl` matches `baseUrl`, `BASEURL`, or `BASE_URL`). Use the overlay to inject secrets or per-run values without editing files.
 
+### Color themes
+
+Press `Ctrl+T` to cycle through the built-in themes. The current theme is saved to `~/.config/runbook-tui/theme.toml` and restored on the next startup.
+
+Included themes:
+
+- Default
+- Catppuccin Mocha
+- Catppuccin Latte
+- Base16 Default Dark
+- Base16 Default Light
+- Base16 Ocean Dark
+- Base16 Ocean Light
+- Base16 Monokai
+- Base16 One Dark
+- Base16 One Light
+
 ### Exporting output
 
 Press `Ctrl+E` to export the output of the currently selected process or API request to a text file in the current directory.
@@ -216,6 +251,10 @@ Exported files are named `rbt-export-runbook-<timestamp>.txt` or `rbt-export-api
 | `Ctrl+E` | Export selected output to a file |
 | `Ctrl+G` | Switch API environment (API mode only) |
 | `Ctrl+O` | Open the file import dialog |
+| `F2` | Switch to the next tab, or open the tab selector when more than two tabs |
+| `Ctrl+Left` / `Ctrl+Right` | Move to the previous / next tab |
+| `F3` | Open the file import dialog in a new tab |
+| `Ctrl+T` | Cycle color theme |
 | `Ctrl+C` | Quit |
 | `Ctrl+N` | Move down / next |
 | `Ctrl+P` | Move up / previous |
@@ -279,10 +318,13 @@ Runbook `keybinding` values support:
 
 ### API collection notes
 
-- Only `request` objects with a `method` and `url` are imported.
-- `header` entries are included in the outgoing request.
-- Only `body.mode == "raw"` is supported.
-- `.json` files passed without `--api` are automatically treated as API collections.
+- Postman: only `request` objects with a `method` and `url` are imported.
+- Postman: `header` entries are included in the outgoing request.
+- Postman: only `body.mode == "raw"` is supported.
+- OpenAPI: paths and operations (`get`, `post`, etc.) are imported, including path/query/header parameters.
+- OpenAPI: `securitySchemes` with `type: apiKey` produce a secret variable and the appropriate header or query param.
+- OpenAPI: request body examples and schema-derived examples are supported for `application/json` and other content types.
+- `.json`, `.yaml`, and `.yml` files passed without `--api` are automatically treated as API collections if they parse as Postman or OpenAPI.
 
 ## Development
 
@@ -306,7 +348,7 @@ src/
 ├── config.rs      # Runbook TOML parsing
 ├── keybinding.rs  # Keybinding parsing and matching
 ├── process.rs     # Async shell command runner
-└── api.rs         # Postman collection parsing and async HTTP client
+└── api.rs         # Postman / OpenAPI collection parsing and async HTTP client
 ```
 
 ## License

@@ -8,13 +8,14 @@ use tokio::sync::Mutex;
 
 use crate::app::AppEvent;
 
-pub(crate) async fn run_process(id: usize, command: String, log_path: PathBuf, tx: UnboundedSender<AppEvent>) {
-    if let Err(e) = run_process_inner(id, command, log_path, tx.clone()).await {
-        let _ = tx.send(AppEvent::ProcessError { id, error: e.to_string() });
+pub(crate) async fn run_process(tab: usize, id: usize, command: String, log_path: PathBuf, tx: UnboundedSender<AppEvent>) {
+    if let Err(e) = run_process_inner(tab, id, command, log_path, tx.clone()).await {
+        let _ = tx.send(AppEvent::ProcessError { tab, id, error: e.to_string() });
     }
 }
 
 async fn run_process_inner(
+    tab: usize,
     id: usize,
     command: String,
     log_path: PathBuf,
@@ -38,8 +39,8 @@ async fn run_process_inner(
     let tx_out = tx.clone();
     let tx_err = tx.clone();
 
-    let h1 = tokio::spawn(read_lines(id, stdout, file.clone(), tx_out));
-    let h2 = tokio::spawn(read_lines(id, stderr, file.clone(), tx_err));
+    let h1 = tokio::spawn(read_lines(tab, id, stdout, file.clone(), tx_out));
+    let h2 = tokio::spawn(read_lines(tab, id, stderr, file.clone(), tx_err));
 
     let (r1, r2) = tokio::join!(h1, h2);
     r1.map_err(std::io::Error::other)??;
@@ -51,11 +52,12 @@ async fn run_process_inner(
 
     let status = child.wait().await?;
     let code = status.code();
-    let _ = tx.send(AppEvent::ProcessExit { id, code });
+    let _ = tx.send(AppEvent::ProcessExit { tab, id, code });
     Ok(())
 }
 
 async fn read_lines<R: tokio::io::AsyncBufRead + Unpin>(
+    tab: usize,
     id: usize,
     mut lines: tokio::io::Lines<R>,
     file: Arc<Mutex<BufWriter<tokio::fs::File>>>,
@@ -66,7 +68,7 @@ async fn read_lines<R: tokio::io::AsyncBufRead + Unpin>(
         file.write_all(line.as_bytes()).await?;
         file.write_all(b"\n").await?;
         drop(file);
-        if tx.send(AppEvent::ProcessLine { id, line }).is_err() {
+        if tx.send(AppEvent::ProcessLine { tab, id, line }).is_err() {
             break;
         }
     }

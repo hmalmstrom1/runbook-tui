@@ -1,0 +1,45 @@
+openapi: 3.1.0
+info:
+  title: Test OpenAPI
+  version: 1.0.0
+servers:
+  - url: https://httpbin.org
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+security:
+  - apiKey: []
+paths:
+  /get:
+    get:
+      operationId: getWithApiKey
+      summary: GET with API key
+      parameters:
+        - name: foo
+          in: query
+          schema:
+            type: string
+            default: bar
+      responses:
+        "200":
+          description: OK
+  /post:
+    post:
+      operationId: postJson
+      summary: POST JSON body
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                count:
+                  type: integer
+      responses:
+        "200":
+          description: OK
