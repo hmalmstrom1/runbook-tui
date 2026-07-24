@@ -17,6 +17,11 @@
       "key": "name",
       "value": "runbook-tui",
       "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "Bearer super-secret-token",
+      "type": "secret"
     }
   ],
   "item": [
@@ -43,6 +48,19 @@
           "mode": "raw",
           "raw": "{\"message\":\"{{greeting}} {{name}}!\"}"
         }
+      }
+    },
+    {
+      "name": "Get with secret header",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/bearer",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "{{apiKey}}"
+          }
+        ]
       }
     }
   ]

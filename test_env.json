@@ -3,7 +3,11 @@
     "test": {
       "baseUrl": "https://httpbin.org",
       "greeting": "Bonjour",
-      "name": "env-test"
+      "name": "env-test",
+      "apiKey": {
+        "value": "test-secret-key",
+        "type": "secret"
+      }
     }
   }
 }

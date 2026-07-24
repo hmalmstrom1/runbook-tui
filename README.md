@@ -119,6 +119,8 @@ Run it with `--api`:
 
 Postman-style variables defined at the collection level are substituted in the `url`, header `value`, and request `body` before a request is sent. Use the `{{variable_name}}` syntax. In API mode the lower-left Variables pane shows the current values; press `Tab` to focus it and `Enter` on a variable to edit its value for the current session.
 
+Variables with `"type": "secret"` have their values masked as `********` in the variables pane. When editing a secret variable the value is also hidden; press `m` while editing to toggle the mask off and on.
+
 ```json
 {
   "info": { "name": "Variables Test" },
@@ -163,7 +165,11 @@ Create a file like `environments.json`:
   "environments": {
     "dev": {
       "baseUrl": "http://localhost:8080",
-      "greeting": "Hi"
+      "greeting": "Hi",
+      "apiKey": {
+        "value": "dev-secret",
+        "type": "secret"
+      }
     },
     "prod": {
       "baseUrl": "https://api.example.com",
@@ -173,13 +179,20 @@ Create a file like `environments.json`:
 }
 ```
 
-Each environment is an object of `key: value` pairs. Values override collection variables with the same key and can add new keys. Load the group and select an environment at startup:
+Each environment is an object of `key: value` pairs. Values override collection variables with the same key and can add new keys. A value can also be an object with `value` and `type`; set `type` to `secret` to have the value masked in the variables pane. Load the group and select an environment at startup:
 
 ```bash
 ./target/release/rbt --api test_collection_variables.json --env environments.json --environment prod
 ```
 
-You can also switch environments at runtime by pressing `Ctrl+G` in API mode.
+You can also switch environments at runtime by pressing `Ctrl+G` in API mode. The environment menu shows:
+
+- `collection` (the collection's own variables)
+- each environment from any loaded env group file
+- `Import env group...` to load another env group JSON file without restarting
+- `[ ] env overlay` / `[x] env overlay` when matching shell environment variables exist
+
+The env overlay applies your current shell environment variables on top of whichever environment is selected. Matching supports the variable name, its uppercase form, and its `SCREAMING_SNAKE_CASE` form (so `baseUrl` matches `baseUrl`, `BASEURL`, or `BASE_URL`). Use the overlay to inject secrets or per-run values without editing files.
 
 ### Exporting output
 

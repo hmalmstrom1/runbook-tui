@@ -332,6 +332,14 @@ fn render_apis(app: &mut App, frame: &mut Frame, area: Rect) {
     frame.render_stateful_widget(list, area, &mut app.api_state);
 }
 
+fn mask_secret(value: &str) -> String {
+    if value.is_empty() {
+        String::new()
+    } else {
+        "********".to_string()
+    }
+}
+
 fn render_variables(app: &mut App, frame: &mut Frame, area: Rect) {
     let editing = app.variable_edit_index;
     let title = if let Some(i) = editing {
@@ -351,10 +359,21 @@ fn render_variables(app: &mut App, frame: &mut Frame, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, (name, value))| {
+            let secret = app.secret_keys.contains(name);
             let text = if editing == Some(i) {
-                format!("{}: {}", name, app.variable_edit_value)
+                let shown = if secret && !app.variable_edit_reveal {
+                    mask_secret(&app.variable_edit_value)
+                } else {
+                    app.variable_edit_value.clone()
+                };
+                format!("{}: {}", name, shown)
             } else {
-                format!("{} = {}", name, value)
+                let shown = if secret {
+                    mask_secret(value)
+                } else {
+                    value.clone()
+                };
+                format!("{} = {}", name, shown)
             };
             ListItem::new(text)
         })

@@ -80,9 +80,11 @@ pub async fn run() -> Result<()> {
 
     let mut app = if force_api || path.extension().and_then(|e| e.to_str()) == Some("json") {
         let parsed = parse_collection(&path)?;
-        let groups = env_path.as_deref().map(parse_variable_groups).transpose()?.unwrap_or_default();
-        let selected = env_name.and_then(|name| groups.iter().position(|(n, _)| n == &name));
-        App::new_api(parsed.apis, client, parsed.variables, groups, selected)
+        let env_groups = env_path.as_deref().map(parse_variable_groups).transpose()?.unwrap_or_default();
+        let mut secret_keys = parsed.secret_keys;
+        secret_keys.extend(env_groups.secret_keys);
+        let selected = env_name.and_then(|name| env_groups.groups.iter().position(|(n, _)| n == &name));
+        App::new_api(parsed.apis, client, parsed.variables, secret_keys, env_groups.groups, selected)
     } else {
         let commands = read_config(&path)?;
         App::new(commands, client)

@@ -3,12 +3,20 @@
     "dev": {
       "baseUrl": "https://httpbin.org",
       "greeting": "Hello",
-      "name": "dev"
+      "name": "dev",
+      "apiKey": {
+        "value": "dev-secret-key",
+        "type": "secret"
+      }
     },
     "prod": {
       "baseUrl": "https://httpbin.org",
       "greeting": "Greetings",
-      "name": "prod"
+      "name": "prod",
+      "apiKey": {
+        "value": "prod-secret-key",
+        "type": "secret"
+      }
     }
   }
 }

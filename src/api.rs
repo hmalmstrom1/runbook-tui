@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -50,6 +50,7 @@ fn substitute_variables(text: &str, variables: &[(String, String)]) -> String {
 pub(crate) struct ParsedCollection {
     pub(crate) apis: Vec<ApiItem>,
     pub(crate) variables: Vec<(String, String)>,
+    pub(crate) secret_keys: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +121,8 @@ impl ApiRequest {
 struct PostmanVariable {
     key: String,
     value: String,
+    #[serde(default, rename = "type")]
+    var_type: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -289,10 +292,16 @@ pub(crate) fn parse_collection(path: &Path) -> Result<ParsedCollection> {
     let collection: PostmanCollection = serde_json::from_str(&content)
         .with_context(|| "Failed to parse collection as JSON")?;
 
+    let mut secret_keys = BTreeSet::new();
     let variables: Vec<(String, String)> = collection
         .variable
         .into_iter()
-        .map(|v| (v.key, v.value))
+        .map(|v| {
+            if v.var_type.eq_ignore_ascii_case("secret") {
+                secret_keys.insert(v.key.clone());
+            }
+            (v.key, v.value)
+        })
         .collect();
 
     let mut apis = Vec::new();
@@ -307,7 +316,7 @@ pub(crate) fn parse_collection(path: &Path) -> Result<ParsedCollection> {
         }
     }
 
-    Ok(ParsedCollection { apis, variables })
+    Ok(ParsedCollection { apis, variables, secret_keys })
 }
 
 pub(crate) async fn run_api_request(

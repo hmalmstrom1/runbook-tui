@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -74,6 +74,14 @@ pub(crate) enum InputMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EnvironmentChoice {
+    Collection,
+    Environment(usize),
+    ToggleEnvOverlay,
+    ImportEnvGroup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Focus {
     Commands,
     Processes,
@@ -132,16 +140,20 @@ pub(crate) struct App {
     pub(crate) quit: bool,
     pub(crate) theme: Theme,
     pub(crate) collection_variables: Vec<(String, String)>,
+    pub(crate) secret_keys: BTreeSet<String>,
     pub(crate) environments: Vec<(String, Vec<(String, String)>)>,
     pub(crate) selected_environment: Option<usize>,
+    pub(crate) env_overlay: bool,
     pub(crate) environment_state: ListState,
     pub(crate) variables: Vec<(String, String)>,
     pub(crate) variable_state: ListState,
     pub(crate) variable_edit_index: Option<usize>,
     pub(crate) variable_edit_value: String,
+    pub(crate) variable_edit_reveal: bool,
     pub(crate) zoom: Option<Focus>,
     pub(crate) message: String,
     pub(crate) message_until: Option<Instant>,
+    pub(crate) importing_env_group: bool,
 }
 
 impl App {
@@ -182,16 +194,20 @@ impl App {
             quit: false,
             theme: Theme::default(),
             collection_variables: Vec::new(),
+            secret_keys: BTreeSet::new(),
             environments: Vec::new(),
             selected_environment: None,
+            env_overlay: false,
             environment_state: ListState::default(),
             variables: Vec::new(),
             variable_state: ListState::default(),
             variable_edit_index: None,
             variable_edit_value: String::new(),
+            variable_edit_reveal: false,
             zoom: None,
             message: String::new(),
             message_until: None,
+            importing_env_group: false,
         };
         app.update_filtered();
         app
@@ -201,6 +217,7 @@ impl App {
         apis: Vec<ApiItem>,
         client: reqwest::Client,
         variables: Vec<(String, String)>,
+        secret_keys: BTreeSet<String>,
         environments: Vec<(String, Vec<(String, String)>)>,
         selected_environment: Option<usize>,
     ) -> Self {
@@ -240,16 +257,20 @@ impl App {
             quit: false,
             theme: Theme::default(),
             collection_variables: variables,
+            secret_keys,
             environments,
             selected_environment: None,
+            env_overlay: false,
             environment_state: ListState::default(),
             variables: Vec::new(),
             variable_state: ListState::default(),
             variable_edit_index: None,
             variable_edit_value: String::new(),
+            variable_edit_reveal: false,
             zoom: None,
             message: String::new(),
             message_until: None,
+            importing_env_group: false,
         };
         app.set_environment(selected_environment);
         app.update_filtered();
@@ -267,6 +288,15 @@ impl App {
                     entry.1 = value.clone();
                 } else {
                     merged.push((key.clone(), value.clone()));
+                }
+            }
+        }
+        if self.env_overlay {
+            for (key, value) in crate::env::env_overrides(&self.collection_variables) {
+                if let Some(entry) = merged.iter_mut().find(|(k, _)| k == &key) {
+                    entry.1 = value;
+                } else {
+                    merged.push((key, value));
                 }
             }
         }
@@ -289,16 +319,45 @@ impl App {
     }
 
     pub(crate) fn environment_label(&self) -> String {
-        self.selected_environment
+        let base = self
+            .selected_environment
             .and_then(|idx| self.environments.get(idx))
             .map(|(name, _)| name.clone())
-            .unwrap_or_else(|| "collection".to_string())
+            .unwrap_or_else(|| "collection".to_string());
+        if self.env_overlay {
+            format!("{} + env", base)
+        } else {
+            base
+        }
     }
 
-    pub(crate) fn environment_choices(&self) -> Vec<(String, Option<usize>)> {
-        let mut choices = vec![("collection".to_string(), None)];
+    fn environment_overlay_available(&self) -> bool {
+        !crate::env::env_overrides(&self.collection_variables).is_empty()
+    }
+
+    fn mask_secret_values(&self, text: &str) -> String {
+        let mut result = text.to_string();
+        for (key, value) in &self.variables {
+            if self.secret_keys.contains(key) {
+                result = result.replace(value, "********");
+            }
+        }
+        result
+    }
+
+    pub(crate) fn environment_choices(&self) -> Vec<(String, EnvironmentChoice)> {
+        let mut choices = vec![("collection".to_string(), EnvironmentChoice::Collection)];
         for (idx, (name, _)) in self.environments.iter().enumerate() {
-            choices.push((name.clone(), Some(idx)));
+            choices.push((name.clone(), EnvironmentChoice::Environment(idx)));
+        }
+        choices.push(("Import env group...".to_string(), EnvironmentChoice::ImportEnvGroup));
+        if self.environment_overlay_available() {
+            let label = if self.env_overlay {
+                "[x] env overlay"
+            } else {
+                "[ ] env overlay"
+            };
+            choices.push((label.to_string(), EnvironmentChoice::ToggleEnvOverlay));
         }
         choices
     }
@@ -321,7 +380,7 @@ impl App {
         let choices = self.environment_choices();
         let selected = self
             .selected_environment
-            .and_then(|idx| choices.iter().position(|(_, opt)| *opt == Some(idx)))
+            .and_then(|idx| choices.iter().position(|(_, choice)| matches!(choice, EnvironmentChoice::Environment(i) if *i == idx)))
             .unwrap_or(0);
         self.environment_state.select(Some(selected));
     }
@@ -329,9 +388,29 @@ impl App {
     pub(crate) fn confirm_environment_select(&mut self) {
         let choices = self.environment_choices();
         let index = self.environment_state.selected().unwrap_or(0);
-        let selected = choices.get(index).map(|(_, opt)| *opt).unwrap_or(None);
-        self.set_environment(selected);
-        self.input_mode = InputMode::Normal;
+        let choice = choices.get(index).map(|(_, choice)| *choice);
+        match choice {
+            Some(EnvironmentChoice::Collection) => {
+                self.set_environment(None);
+                self.input_mode = InputMode::Normal;
+            }
+            Some(EnvironmentChoice::Environment(idx)) => {
+                self.set_environment(Some(idx));
+                self.input_mode = InputMode::Normal;
+            }
+            Some(EnvironmentChoice::ImportEnvGroup) => {
+                self.start_env_group_import();
+            }
+            Some(EnvironmentChoice::ToggleEnvOverlay) => {
+                self.env_overlay = !self.env_overlay;
+                self.recompute_variables();
+                self.environment_state.select(Some(index));
+                // keep the menu open so the user can select an environment next
+            }
+            None => {
+                self.input_mode = InputMode::Normal;
+            }
+        }
     }
 
     pub(crate) fn cancel_environment_select(&mut self) {
@@ -422,10 +501,11 @@ impl App {
 
     pub(crate) fn start_variable_edit(&mut self) {
         if let Some(i) = self.variable_state.selected()
-            && let Some((_, value)) = self.variables.get(i)
+            && let Some((key, value)) = self.variables.get(i)
         {
             self.variable_edit_index = Some(i);
             self.variable_edit_value = value.clone();
+            self.variable_edit_reveal = !self.secret_keys.contains(key);
             self.input_mode = InputMode::VariableEdit;
         }
     }
@@ -451,6 +531,10 @@ impl App {
 
     pub(crate) fn variable_edit_pop(&mut self) {
         self.variable_edit_value.pop();
+    }
+
+    pub(crate) fn toggle_variable_edit_reveal(&mut self) {
+        self.variable_edit_reveal = !self.variable_edit_reveal;
     }
 
     pub(crate) fn toggle_zoom(&mut self) {
@@ -604,10 +688,23 @@ impl App {
 
     pub(crate) fn start_import(&mut self) {
         self.input_mode = InputMode::Import;
+        self.importing_env_group = false;
         self.import_path = PathBuf::new();
         self.import_filter.clear();
         self.import_cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         self.import_message = "Type to filter, ↑/↓ to select, Enter to open".to_string();
+        self.import_error = false;
+        self.refresh_import_entries();
+        self.import_state.select(Some(0));
+    }
+
+    pub(crate) fn start_env_group_import(&mut self) {
+        self.input_mode = InputMode::Import;
+        self.importing_env_group = true;
+        self.import_path = PathBuf::new();
+        self.import_filter.clear();
+        self.import_cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        self.import_message = "Select an env group JSON file".to_string();
         self.import_error = false;
         self.refresh_import_entries();
         self.import_state.select(Some(0));
@@ -718,10 +815,29 @@ impl App {
 
     pub(crate) fn confirm_import(&mut self) {
         let path = self.import_path.clone();
+        if self.importing_env_group {
+            match crate::env::parse_variable_groups(&path) {
+                Ok(parsed) => {
+                    for group in parsed.groups {
+                        self.environments.push(group);
+                    }
+                    self.secret_keys.extend(parsed.secret_keys);
+                    self.recompute_variables();
+                    self.importing_env_group = false;
+                    self.input_mode = InputMode::EnvironmentSelect;
+                    self.set_message("Env group imported");
+                }
+                Err(e) => {
+                    self.import_message = format!("Error: {}", e);
+                    self.import_error = true;
+                }
+            }
+            return;
+        }
         let result = if path.extension().and_then(|e| e.to_str()) == Some("json") {
             api::parse_collection(&path).map(|parsed| {
                 let client = self.client.clone();
-                *self = Self::new_api(parsed.apis, client, parsed.variables, Vec::new(), None);
+                *self = Self::new_api(parsed.apis, client, parsed.variables, parsed.secret_keys, Vec::new(), None);
             })
         } else {
             read_config(&path).map(|commands| {
@@ -886,6 +1002,12 @@ impl App {
                 request_body.push_back(line.to_string());
             }
         }
+
+        let request_headers = self.mask_secret_values(&request_headers);
+        let request_body: VecDeque<String> = request_body
+            .into_iter()
+            .map(|line| self.mask_secret_values(&line))
+            .collect();
 
         let request = ApiRequest {
             id,
@@ -1056,6 +1178,7 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
         if key.code == KeyCode::Esc
             || (key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL))
         {
+            app.importing_env_group = false;
             app.input_mode = InputMode::Normal;
         } else {
             handle_import_key(app, key);
@@ -1066,6 +1189,9 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
         match key.code {
             KeyCode::Enter => app.confirm_variable_edit(),
             KeyCode::Esc => app.cancel_variable_edit(),
+            KeyCode::Char('m') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                app.toggle_variable_edit_reveal();
+            }
             KeyCode::Char(c) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 app.variable_edit_push(c);
             }
