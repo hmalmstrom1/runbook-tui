@@ -29,6 +29,10 @@ pub async fn run() -> Result<()> {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
+            "--version" | "-V" => {
+                println!("rbt {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
             "--api" => {
                 i += 1;
                 if i >= args.len() {

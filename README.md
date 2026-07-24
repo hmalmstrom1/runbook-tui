@@ -40,7 +40,13 @@ cargo build --release
 
 The binary is written to `target/release/rbt`.
 
+Prebuilt binaries for Linux, macOS, and Windows are attached to GitHub Releases. They are built automatically by `.github/workflows/build.yml`.
+
 ## Usage
+
+```bash
+rbt --version
+```
 
 ### Runbook mode
 
