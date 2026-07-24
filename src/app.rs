@@ -70,6 +70,7 @@ pub(crate) enum InputMode {
     Search,
     Import,
     VariableEdit,
+    EnvironmentSelect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +131,10 @@ pub(crate) struct App {
     pub(crate) show_help: bool,
     pub(crate) quit: bool,
     pub(crate) theme: Theme,
+    pub(crate) collection_variables: Vec<(String, String)>,
+    pub(crate) environments: Vec<(String, Vec<(String, String)>)>,
+    pub(crate) selected_environment: Option<usize>,
+    pub(crate) environment_state: ListState,
     pub(crate) variables: Vec<(String, String)>,
     pub(crate) variable_state: ListState,
     pub(crate) variable_edit_index: Option<usize>,
@@ -176,6 +181,10 @@ impl App {
             show_help: false,
             quit: false,
             theme: Theme::default(),
+            collection_variables: Vec::new(),
+            environments: Vec::new(),
+            selected_environment: None,
+            environment_state: ListState::default(),
             variables: Vec::new(),
             variable_state: ListState::default(),
             variable_edit_index: None,
@@ -192,6 +201,8 @@ impl App {
         apis: Vec<ApiItem>,
         client: reqwest::Client,
         variables: Vec<(String, String)>,
+        environments: Vec<(String, Vec<(String, String)>)>,
+        selected_environment: Option<usize>,
     ) -> Self {
         let mut app = Self {
             app_mode: AppMode::Api,
@@ -228,7 +239,11 @@ impl App {
             show_help: false,
             quit: false,
             theme: Theme::default(),
-            variables,
+            collection_variables: variables,
+            environments,
+            selected_environment: None,
+            environment_state: ListState::default(),
+            variables: Vec::new(),
             variable_state: ListState::default(),
             variable_edit_index: None,
             variable_edit_value: String::new(),
@@ -236,9 +251,91 @@ impl App {
             message: String::new(),
             message_until: None,
         };
+        app.set_environment(selected_environment);
         app.update_filtered();
         app.variable_state.select(Some(0));
         app
+    }
+
+    fn recompute_variables(&mut self) {
+        let mut merged = self.collection_variables.clone();
+        if let Some(idx) = self.selected_environment
+            && let Some((_, env_vars)) = self.environments.get(idx)
+        {
+            for (key, value) in env_vars {
+                if let Some(entry) = merged.iter_mut().find(|(k, _)| k == key) {
+                    entry.1 = value.clone();
+                } else {
+                    merged.push((key.clone(), value.clone()));
+                }
+            }
+        }
+        self.variables = merged;
+    }
+
+    pub(crate) fn set_environment(&mut self, index: Option<usize>) {
+        if let Some(idx) = index {
+            if idx >= self.environments.len() {
+                return;
+            }
+            self.selected_environment = Some(idx);
+        } else {
+            self.selected_environment = None;
+        }
+        self.recompute_variables();
+        self.variable_edit_index = None;
+        self.variable_edit_value.clear();
+        self.variable_state.select(Some(0));
+    }
+
+    pub(crate) fn environment_label(&self) -> String {
+        self.selected_environment
+            .and_then(|idx| self.environments.get(idx))
+            .map(|(name, _)| name.clone())
+            .unwrap_or_else(|| "collection".to_string())
+    }
+
+    pub(crate) fn environment_choices(&self) -> Vec<(String, Option<usize>)> {
+        let mut choices = vec![("collection".to_string(), None)];
+        for (idx, (name, _)) in self.environments.iter().enumerate() {
+            choices.push((name.clone(), Some(idx)));
+        }
+        choices
+    }
+
+    pub(crate) fn select_next_environment(&mut self) {
+        let max = self.environment_choices().len().saturating_sub(1);
+        let i = self.environment_state.selected().unwrap_or(0);
+        let next = (i + 1).min(max);
+        self.environment_state.select(Some(next));
+    }
+
+    pub(crate) fn select_prev_environment(&mut self) {
+        let i = self.environment_state.selected().unwrap_or(0);
+        let prev = i.saturating_sub(1);
+        self.environment_state.select(Some(prev));
+    }
+
+    pub(crate) fn open_environment_select(&mut self) {
+        self.input_mode = InputMode::EnvironmentSelect;
+        let choices = self.environment_choices();
+        let selected = self
+            .selected_environment
+            .and_then(|idx| choices.iter().position(|(_, opt)| *opt == Some(idx)))
+            .unwrap_or(0);
+        self.environment_state.select(Some(selected));
+    }
+
+    pub(crate) fn confirm_environment_select(&mut self) {
+        let choices = self.environment_choices();
+        let index = self.environment_state.selected().unwrap_or(0);
+        let selected = choices.get(index).map(|(_, opt)| *opt).unwrap_or(None);
+        self.set_environment(selected);
+        self.input_mode = InputMode::Normal;
+    }
+
+    pub(crate) fn cancel_environment_select(&mut self) {
+        self.input_mode = InputMode::Normal;
     }
 
     pub(crate) fn update_filtered(&mut self) {
@@ -624,7 +721,7 @@ impl App {
         let result = if path.extension().and_then(|e| e.to_str()) == Some("json") {
             api::parse_collection(&path).map(|parsed| {
                 let client = self.client.clone();
-                *self = Self::new_api(parsed.apis, client, parsed.variables);
+                *self = Self::new_api(parsed.apis, client, parsed.variables, Vec::new(), None);
             })
         } else {
             read_config(&path).map(|commands| {
@@ -977,6 +1074,18 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
         }
         return;
     }
+    if app.input_mode == InputMode::EnvironmentSelect {
+        match key.code {
+            KeyCode::Enter => app.confirm_environment_select(),
+            KeyCode::Esc => app.cancel_environment_select(),
+            KeyCode::Up => app.select_prev_environment(),
+            KeyCode::Down => app.select_next_environment(),
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => app.select_prev_environment(),
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => app.select_next_environment(),
+            _ => {}
+        }
+        return;
+    }
     if key.code == KeyCode::Char('m')
         && app.input_mode == InputMode::Normal
         && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
@@ -996,6 +1105,12 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
     }
     if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
         app.export_output();
+        return;
+    }
+    if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if app.app_mode == AppMode::Api {
+            app.open_environment_select();
+        }
         return;
     }
     if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {

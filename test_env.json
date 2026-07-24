@@ -1,0 +1,9 @@
+{
+  "environments": {
+    "test": {
+      "baseUrl": "https://httpbin.org",
+      "greeting": "Bonjour",
+      "name": "env-test"
+    }
+  }
+}

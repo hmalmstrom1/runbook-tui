@@ -96,6 +96,10 @@ pub(crate) fn ui(app: &mut App, frame: &mut Frame) {
         render_help(app, frame, area);
     }
 
+    if app.input_mode == InputMode::EnvironmentSelect {
+        render_environment_select(app, frame, area);
+    }
+
     render_message(app, frame, area);
 }
 
@@ -148,7 +152,7 @@ fn render_search(app: &App, frame: &mut Frame, area: Rect) {
     let search_focused = app.focus == Focus::Commands && app.input_mode == InputMode::Search;
     let hint = match app.app_mode {
         AppMode::Runbook => "Type / to search, Enter to run, Ctrl+E export, Ctrl+O open file, Tab/Shift-Tab panes, PgUp/Dn scroll output",
-        AppMode::Api => "Type / to search APIs, Enter to send/edit, Ctrl+E export, Ctrl+O open file, Tab/Shift-Tab panes, PgUp/Dn scroll body",
+        AppMode::Api => "Type / to search APIs, Enter to send/edit, Ctrl+E export, Ctrl+G env, Ctrl+O open file, Tab/Shift-Tab panes, PgUp/Dn scroll body",
     };
     let text = if app.search.is_empty() { hint } else { &app.search };
     let style = if search_focused { app.theme.input } else { app.theme.border };
@@ -223,6 +227,37 @@ fn render_import(app: &mut App, frame: &mut Frame, area: Rect) {
         .highlight_style(app.theme.highlight)
         .highlight_symbol("> ");
     frame.render_stateful_widget(list, list_area, &mut app.import_state);
+}
+
+fn render_environment_select(app: &mut App, frame: &mut Frame, area: Rect) {
+    let popup_width = (area.width * 3 / 5).max(30).min(area.width.saturating_sub(4));
+    let popup_height = ((app.environment_choices().len() as u16 + 2).clamp(5, area.height.saturating_sub(4))).min(area.height);
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
+        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(format!("Environment (current: {})", app.environment_label()))
+        .borders(Borders::ALL)
+        .border_style(app.theme.focused);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let items: Vec<ListItem> = app
+        .environment_choices()
+        .iter()
+        .map(|(name, _)| ListItem::new(name.clone()))
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::NONE))
+        .highlight_style(app.theme.highlight)
+        .highlight_symbol("> ");
+    frame.render_stateful_widget(list, inner, &mut app.environment_state);
 }
 
 fn render_commands(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -305,7 +340,10 @@ fn render_variables(app: &mut App, frame: &mut Frame, area: Rect) {
             app.variables.get(i).map(|(n, _)| n.as_str()).unwrap_or("")
         )
     } else {
-        "Variables (Enter to edit)".to_string()
+        format!(
+            "Variables (env: {}) (Enter to edit)",
+            app.environment_label()
+        )
     };
 
     let items: Vec<ListItem> = app
@@ -534,6 +572,7 @@ fn help_lines(app: &App) -> Vec<String> {
         "  Shift+Tab    cycle focus backward".to_string(),
         "  m            maximize / restore focused pane".to_string(),
         "  Ctrl+E       export selected output".to_string(),
+        "  Ctrl+G       switch API environment".to_string(),
         "  Ctrl+O       open file".to_string(),
         "  Ctrl+C       quit".to_string(),
         "  Ctrl+N       move down / next".to_string(),

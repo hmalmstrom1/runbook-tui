@@ -1,6 +1,7 @@
 pub mod api;
 pub mod app;
 pub mod config;
+pub mod env;
 pub mod keybinding;
 pub mod process;
 pub mod theme;
@@ -16,11 +17,13 @@ use anyhow::Result;
 use crate::api::parse_collection;
 use crate::app::{read_input, App, AppEvent, handle_event};
 use crate::config::read_config;
+use crate::env::parse_variable_groups;
 use crate::ui::{install_panic_hook, TerminalGuard, ui};
 
 pub async fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let (mut path, mut force_api) = (PathBuf::from("runbook.toml"), false);
+    let (mut env_path, mut env_name) = (None, None);
 
     let mut i = 1;
     while i < args.len() {
@@ -32,6 +35,20 @@ pub async fn run() -> Result<()> {
                     anyhow::bail!("--api requires a collection JSON file path");
                 }
                 path = PathBuf::from(&args[i]);
+            }
+            "--env" => {
+                i += 1;
+                if i >= args.len() {
+                    anyhow::bail!("--env requires a variable group JSON file path");
+                }
+                env_path = Some(PathBuf::from(&args[i]));
+            }
+            "--environment" => {
+                i += 1;
+                if i >= args.len() {
+                    anyhow::bail!("--environment requires an environment name");
+                }
+                env_name = Some(args[i].clone());
             }
             _ if i == args.len() - 1 => {
                 path = PathBuf::from(&args[i]);
@@ -50,6 +67,10 @@ pub async fn run() -> Result<()> {
         );
     }
 
+    if let Some(ref p) = env_path && !p.exists() {
+        anyhow::bail!("Variable group file not found: {}", p.display());
+    }
+
     install_panic_hook();
 
     let client = reqwest::Client::new();
@@ -59,7 +80,9 @@ pub async fn run() -> Result<()> {
 
     let mut app = if force_api || path.extension().and_then(|e| e.to_str()) == Some("json") {
         let parsed = parse_collection(&path)?;
-        App::new_api(parsed.apis, client, parsed.variables)
+        let groups = env_path.as_deref().map(parse_variable_groups).transpose()?.unwrap_or_default();
+        let selected = env_name.and_then(|name| groups.iter().position(|(n, _)| n == &name));
+        App::new_api(parsed.apis, client, parsed.variables, groups, selected)
     } else {
         let commands = read_config(&path)?;
         App::new(commands, client)

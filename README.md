@@ -152,6 +152,35 @@ Run it with `--api`:
 ./target/release/rbt --api test_collection_variables.json
 ```
 
+### Environment variable groups
+
+API collections can define default variables, and you can overlay environment-specific values from a separate JSON file. This makes it easy to switch between `dev`, `staging`, `prod`, or any other environment without editing the collection.
+
+Create a file like `environments.json`:
+
+```json
+{
+  "environments": {
+    "dev": {
+      "baseUrl": "http://localhost:8080",
+      "greeting": "Hi"
+    },
+    "prod": {
+      "baseUrl": "https://api.example.com",
+      "greeting": "Hello"
+    }
+  }
+}
+```
+
+Each environment is an object of `key: value` pairs. Values override collection variables with the same key and can add new keys. Load the group and select an environment at startup:
+
+```bash
+./target/release/rbt --api test_collection_variables.json --env environments.json --environment prod
+```
+
+You can also switch environments at runtime by pressing `Ctrl+G` in API mode.
+
 ### Exporting output
 
 Press `Ctrl+E` to export the output of the currently selected process or API request to a text file in the current directory.
@@ -172,6 +201,7 @@ Exported files are named `rbt-export-runbook-<timestamp>.txt` or `rbt-export-api
 | `Shift+Tab` | Cycle focus backward |
 | `m` | Maximize / restore the focused pane |
 | `Ctrl+E` | Export selected output to a file |
+| `Ctrl+G` | Switch API environment (API mode only) |
 | `Ctrl+O` | Open the file import dialog |
 | `Ctrl+C` | Quit |
 | `Ctrl+N` | Move down / next |

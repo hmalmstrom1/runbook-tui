@@ -1,0 +1,14 @@
+{
+  "environments": {
+    "dev": {
+      "baseUrl": "https://httpbin.org",
+      "greeting": "Hello",
+      "name": "dev"
+    },
+    "prod": {
+      "baseUrl": "https://httpbin.org",
+      "greeting": "Greetings",
+      "name": "prod"
+    }
+  }
+}
