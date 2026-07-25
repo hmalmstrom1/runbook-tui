@@ -17,7 +17,7 @@ use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use crate::api::parse_collection;
 use crate::app::{read_input, App, AppEvent, handle_event};
-use crate::config::read_config;
+use crate::config::{load_global_editor, read_config, resolve_editor};
 use crate::env::parse_variable_groups;
 use crate::ui::{install_panic_hook, TerminalGuard, ui};
 
@@ -80,14 +80,21 @@ pub async fn run() -> Result<()> {
 
     install_panic_hook();
 
+    let global_editor = load_global_editor();
     let client = reqwest::Client::new();
     let mut guard = TerminalGuard::setup()?;
-    let terminal = guard.terminal();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
     let mut tabs: Vec<App> = Vec::new();
     for (path, force_api) in &path_args {
-        let app = load_app(path, client.clone(), env_path.as_deref(), env_name.as_deref(), *force_api)?;
+        let app = load_app(
+            path,
+            client.clone(),
+            env_path.as_deref(),
+            env_name.as_deref(),
+            *force_api,
+            global_editor.clone(),
+        )?;
         tabs.push(app);
     }
     for (i, tab) in tabs.iter_mut().enumerate() {
@@ -97,9 +104,11 @@ pub async fn run() -> Result<()> {
     let mut current_tab = 0usize;
 
     let running = Arc::new(AtomicBool::new(true));
+    let input_paused = Arc::new(AtomicBool::new(false));
     let running_input = running.clone();
+    let paused_input = input_paused.clone();
     let input_tx = tx.clone();
-    let input_handle = tokio::task::spawn_blocking(move || read_input(running_input, input_tx));
+    let input_handle = tokio::task::spawn_blocking(move || read_input(running_input, paused_input, input_tx));
 
     let mut interval = tokio::time::interval(Duration::from_millis(250));
     let result = loop {
@@ -108,7 +117,7 @@ pub async fn run() -> Result<()> {
             tab.tab_titles = titles.clone();
         }
 
-        terminal.draw(|f| ui(&mut tabs[current_tab], f))?;
+        guard.terminal().draw(|f| ui(&mut tabs[current_tab], f))?;
         let event = tokio::select! {
             _ = interval.tick() => AppEvent::Tick,
             Some(e) = rx.recv() => e,
@@ -119,7 +128,12 @@ pub async fn run() -> Result<()> {
                     handle_event(tab, AppEvent::Tick, tx.clone());
                 }
             }
-            AppEvent::Input(evt) => handle_input(evt, &mut tabs, &mut current_tab, &tx)?,
+            AppEvent::Input(evt) => {
+                let editor_opened = handle_input(evt, &mut tabs, &mut current_tab, &tx, &mut guard, &input_paused)?;
+                if editor_opened {
+                    drain_input_events(&mut rx, &tx);
+                }
+            }
             AppEvent::ProcessLine { tab, .. }
             | AppEvent::ProcessExit { tab, .. }
             | AppEvent::ProcessError { tab, .. }
@@ -135,7 +149,14 @@ pub async fn run() -> Result<()> {
                 }
             }
             AppEvent::NewTabImport { path } => {
-                match load_app(&path, client.clone(), env_path.as_deref(), env_name.as_deref(), false) {
+                match load_app(
+                    &path,
+                    client.clone(),
+                    env_path.as_deref(),
+                    env_name.as_deref(),
+                    false,
+                    global_editor.clone(),
+                ) {
                     Ok(mut app) => {
                         app.tab_idx = tabs.len();
                         tabs.push(app);
@@ -163,6 +184,7 @@ fn load_app(
     env_path: Option<&Path>,
     env_name: Option<&str>,
     force_api: bool,
+    global_editor: Option<String>,
 ) -> Result<App> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
     let is_api_file = force_api || ext == "json" || ext == "yaml" || ext == "yml";
@@ -175,10 +197,16 @@ fn load_app(
         let selected = env_name.and_then(|name| env_groups.groups.iter().position(|(n, _)| n == name));
         App::new_api(parsed.apis, client, parsed.variables, secret_keys, env_groups.groups, selected)
     } else {
-        let commands = read_config(path)?;
-        App::new(commands, client)
+        let cfg = read_config(path)?;
+        let mut app = App::new(cfg.commands, client);
+        app.editor = resolve_editor(cfg.editor, global_editor.clone());
+        app
     };
 
+    app.tab_path = path.to_path_buf();
+    if app.editor.is_empty() {
+        app.editor = resolve_editor(None, global_editor);
+    }
     app.tab_title = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string_lossy().to_string());
     Ok(app)
 }
@@ -188,14 +216,16 @@ fn handle_input(
     tabs: &mut [App],
     current_tab: &mut usize,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
-) -> Result<()> {
+    guard: &mut TerminalGuard,
+    input_paused: &Arc<AtomicBool>,
+) -> Result<bool> {
     if let Event::Key(key) = evt {
         if key.kind != KeyEventKind::Press {
-            return Ok(());
+            return Ok(false);
         }
         if key.code == KeyCode::F(2) {
             if tabs.len() < 2 {
-                return Ok(());
+                return Ok(false);
             }
             if tabs.len() == 2 {
                 *current_tab = 1 - *current_tab;
@@ -203,23 +233,46 @@ fn handle_input(
                 let titles = tabs.iter().map(|t| t.tab_title.clone()).collect();
                 tabs[*current_tab].open_tab_select(titles);
             }
-            return Ok(());
+            return Ok(false);
+        }
+        if key.code == KeyCode::F(4) {
+            let path = tabs[*current_tab].tab_path.clone();
+            let editor = tabs[*current_tab].editor.clone();
+            input_paused.store(true, Ordering::Relaxed);
+            let result = guard.run_editor(&path, &editor);
+            input_paused.store(false, Ordering::Relaxed);
+            if let Err(e) = result {
+                tabs[*current_tab].set_message(format!("Editor failed: {}", e));
+            }
+            return Ok(true);
         }
         if key.code == KeyCode::Right && key.modifiers.contains(KeyModifiers::CONTROL) {
             if tabs.len() > 1 {
                 *current_tab = (*current_tab + 1) % tabs.len();
             }
-            return Ok(());
+            return Ok(false);
         }
         if key.code == KeyCode::Left && key.modifiers.contains(KeyModifiers::CONTROL) {
             if tabs.len() > 1 {
                 *current_tab = (*current_tab + tabs.len() - 1) % tabs.len();
             }
-            return Ok(());
+            return Ok(false);
         }
         handle_event(&mut tabs[*current_tab], AppEvent::Input(Event::Key(key)), tx.clone());
     } else {
         handle_event(&mut tabs[*current_tab], AppEvent::Input(evt), tx.clone());
     }
-    Ok(())
+    Ok(false)
+}
+
+fn drain_input_events(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+) {
+    while let Ok(evt) = rx.try_recv() {
+        if matches!(evt, AppEvent::Input(_)) {
+            continue;
+        }
+        let _ = tx.send(evt);
+    }
 }

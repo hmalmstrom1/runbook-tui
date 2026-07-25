@@ -260,6 +260,7 @@ Exported files are named `rbt-export-runbook-<timestamp>.txt` or `rbt-export-api
 | `F2` | Switch to the next tab, or open the tab selector when more than two tabs |
 | `Ctrl+Left` / `Ctrl+Right` | Move to the previous / next tab |
 | `F3` | Open the file import dialog in a new tab |
+| `F4` | Edit the current tab's source file in an external editor |
 | `Ctrl+T` | Cycle color theme |
 | `Ctrl+C` | Quit |
 | `Ctrl+N` | Move down / next |
@@ -321,6 +322,29 @@ Runbook `keybinding` values support:
 - Single letters or digits (`a`, `1`)
 - Function keys (`f1` through `f12`)
 - Control combinations (`ctrl+c`, `^c`)
+
+### External editor
+
+Press `F4` to edit the current tab's source file in an external editor. The editor is resolved in this order:
+
+1. An `editor` field in the loaded runbook TOML file.
+2. An `editor` field in `~/.config/runbook-tui/config.toml`.
+3. The `VISUAL` environment variable.
+4. The `EDITOR` environment variable.
+5. `vi` as a final fallback.
+
+For example, in `runbook.toml`:
+
+```toml
+editor = "vim"
+
+[[commands]]
+title = "Ping localhost"
+keybinding = "p"
+command = "ping -c 3 127.0.0.1"
+```
+
+Editors with arguments (such as `code -w` or `subl -n`) are supported.
 
 ### API collection notes
 

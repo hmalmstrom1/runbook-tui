@@ -11,7 +11,7 @@ use ratatui::widgets::ListState;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::api::{self, ApiItem, ApiRequest, ApiStatus, format_body, run_api_request};
-use crate::config::{read_config, Command};
+use crate::config::{load_global_editor, read_config, resolve_editor, Command};
 use crate::process::run_process;
 use crate::theme::Theme;
 use crate::ui::colorize_body;
@@ -161,6 +161,8 @@ pub(crate) struct App {
     pub(crate) tab_title: String,
     pub(crate) tab_titles: Vec<String>,
     pub(crate) tab_select_state: ListState,
+    pub(crate) tab_path: PathBuf,
+    pub(crate) editor: String,
 }
 
 impl App {
@@ -221,6 +223,8 @@ impl App {
             tab_title: String::new(),
             tab_titles: Vec::new(),
             tab_select_state: ListState::default(),
+            tab_path: PathBuf::new(),
+            editor: String::new(),
         };
         if let Some(name) = crate::theme::load_saved_theme_name() {
             app.theme = crate::theme::theme_by_name(&name);
@@ -294,6 +298,8 @@ impl App {
             tab_title: String::new(),
             tab_titles: Vec::new(),
             tab_select_state: ListState::default(),
+            tab_path: PathBuf::new(),
+            editor: String::new(),
         };
         if let Some(name) = crate::theme::load_saved_theme_name() {
             app.theme = crate::theme::theme_by_name(&name);
@@ -919,19 +925,23 @@ impl App {
             return;
         }
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let global_editor = load_global_editor();
         let result = if ext == "json" || ext == "yaml" || ext == "yml" {
             api::parse_collection(&path).map(|parsed| {
                 let client = self.client.clone();
                 *self = Self::new_api(parsed.apis, client, parsed.variables, parsed.secret_keys, Vec::new(), None);
+                self.editor = resolve_editor(None, global_editor.clone());
             })
         } else {
-            read_config(&path).map(|commands| {
+            read_config(&path).map(|cfg| {
                 let client = self.client.clone();
-                *self = Self::new(commands, client);
+                *self = Self::new(cfg.commands, client);
+                self.editor = resolve_editor(cfg.editor, global_editor.clone());
             })
         };
         if result.is_ok() {
             self.tab_idx = tab_idx;
+            self.tab_path = path.clone();
             self.tab_title = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string_lossy().to_string());
             self.input_mode = InputMode::Normal;
         } else if let Err(e) = result {
@@ -1212,9 +1222,17 @@ pub(crate) enum AppEvent {
     NewTabImport { path: PathBuf },
 }
 
-pub(crate) fn read_input(running: Arc<AtomicBool>, tx: UnboundedSender<AppEvent>) {
+pub(crate) fn read_input(
+    running: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+    tx: UnboundedSender<AppEvent>,
+) {
     while running.load(Ordering::Relaxed) {
-        if event::poll(Duration::from_millis(100)).unwrap_or(false)
+        if paused.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(25));
+            continue;
+        }
+        if event::poll(Duration::from_millis(25)).unwrap_or(false)
             && let Ok(evt) = event::read()
             && tx.send(AppEvent::Input(evt)).is_err()
         {

@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
-use std::io::{self, stdout};
+use std::io::{self, stdout, Write};
+use std::path::Path;
+use std::process::{Command, ExitStatus};
 
 use anyhow::Result;
 use crossterm::event::DisableMouseCapture;
@@ -34,6 +36,48 @@ impl TerminalGuard {
     pub(crate) fn terminal(&mut self) -> &mut Terminal<CrosstermBackend<io::Stdout>> {
         &mut self.terminal
     }
+
+    pub(crate) fn run_editor(&mut self, path: &Path, editor: &str) -> std::io::Result<()> {
+        let mut stdout = stdout();
+        disable_raw_mode()?;
+        stdout.execute(LeaveAlternateScreen)?;
+        stdout.flush()?;
+
+        let result = run_editor_command(path, editor);
+
+        enable_raw_mode()?;
+        stdout.execute(EnterAlternateScreen)?;
+        self.terminal.clear()?;
+
+        let status = result?;
+        if !status.success() {
+            return Err(std::io::Error::other(format!("editor exited with {}", status)));
+        }
+        Ok(())
+    }
+}
+
+fn run_editor_command(path: &Path, editor: &str) -> std::io::Result<ExitStatus> {
+    let program = editor
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| std::io::Error::other("no editor configured"))?;
+    if program.contains(std::path::MAIN_SEPARATOR)
+        && let Ok(meta) = std::fs::metadata(program)
+        && meta.is_dir()
+    {
+        return Err(std::io::Error::other(format!(
+            "editor path is a directory: {}",
+            program
+        )));
+    }
+    let cmd = format!("{} {}", editor, sh_quote_path(path));
+    Command::new("sh").arg("-c").arg(cmd).status()
+}
+
+fn sh_quote_path(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
 
 impl Drop for TerminalGuard {
@@ -55,14 +99,16 @@ pub(crate) fn install_panic_hook() {
 
 pub(crate) fn ui(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
+    let layout = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]);
+    let [body_area, status_area] = area.layout(&layout);
 
     let main_area = if app.tab_titles.len() > 1 {
         let layout = Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).spacing(1);
-        let [tab_area, rest] = area.layout(&layout);
+        let [tab_area, rest] = body_area.layout(&layout);
         render_tabs(app, frame, tab_area);
         rest
     } else {
-        area
+        body_area
     };
 
     if let Some(focus) = app.zoom {
@@ -98,22 +144,23 @@ pub(crate) fn ui(app: &mut App, frame: &mut Frame) {
     }
 
     if app.input_mode == InputMode::Import {
-        render_import(app, frame, area);
+        render_import(app, frame, body_area);
     }
 
     if app.show_help {
-        render_help(app, frame, area);
+        render_help(app, frame, body_area);
     }
 
     if app.input_mode == InputMode::EnvironmentSelect {
-        render_environment_select(app, frame, area);
+        render_environment_select(app, frame, body_area);
     }
 
     if app.input_mode == InputMode::TabSelect {
-        render_tab_select(app, frame, area);
+        render_tab_select(app, frame, body_area);
     }
 
-    render_message(app, frame, area);
+    render_message(app, frame, body_area);
+    render_status(app, frame, status_area);
 }
 
 fn render_message(app: &App, frame: &mut Frame, area: Rect) {
@@ -142,6 +189,28 @@ fn render_message(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, popup);
 }
 
+fn render_status(app: &App, frame: &mut Frame, area: Rect) {
+    if area.height == 0 || app.tab_path.as_os_str().is_empty() {
+        return;
+    }
+    let path = app.tab_path.display().to_string();
+    let text = truncate_status(&path, area.width as usize);
+    let paragraph = Paragraph::new(text).style(app.theme.dim);
+    frame.render_widget(paragraph, area);
+}
+
+fn truncate_status(s: &str, width: usize) -> String {
+    let len = s.chars().count();
+    if len <= width {
+        return s.to_string();
+    }
+    if width <= 3 {
+        return s.chars().take(width).collect();
+    }
+    let skip = len.saturating_sub(width - 3);
+    format!("...{}", s.chars().skip(skip).collect::<String>())
+}
+
 fn render_zoomed(app: &mut App, frame: &mut Frame, area: Rect, focus: Focus) {
     frame.render_widget(Clear, area);
     match (app.app_mode, focus) {
@@ -164,8 +233,8 @@ fn render_search(app: &App, frame: &mut Frame, area: Rect) {
     }
     let search_focused = app.focus == Focus::Commands && app.input_mode == InputMode::Search;
     let hint = match app.app_mode {
-        AppMode::Runbook => "Type / to search, Enter to run, Ctrl+E export, Ctrl+O open file, Tab/Shift-Tab panes, PgUp/Dn scroll output",
-        AppMode::Api => "Type / to search APIs, Enter to send/edit, Ctrl+E export, Ctrl+G env, Ctrl+O open file, Tab/Shift-Tab panes, PgUp/Dn scroll body",
+        AppMode::Runbook => "Type / to search, Enter to run, F4 edit source, Ctrl+E export, Ctrl+O open file, Tab/Shift-Tab panes, PgUp/Dn scroll output",
+        AppMode::Api => "Type / to search APIs, Enter to send/edit, F4 edit source, Ctrl+E export, Ctrl+G env, Ctrl+O open file, Tab/Shift-Tab panes, PgUp/Dn scroll body",
     };
     let text = if app.search.is_empty() { hint } else { &app.search };
     let style = if search_focused { app.theme.input } else { app.theme.border };
@@ -651,6 +720,7 @@ fn help_lines(app: &App) -> Vec<String> {
         "  Ctrl+Left    previous tab".to_string(),
         "  Ctrl+Right   next tab".to_string(),
         "  F3           open file in new tab".to_string(),
+        "  F4           edit source file".to_string(),
         "  Ctrl+T       cycle theme".to_string(),
         "  Ctrl+C       quit".to_string(),
         "  Ctrl+N       move down / next".to_string(),

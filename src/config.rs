@@ -22,10 +22,18 @@ struct RawCommand {
 
 #[derive(Debug, Deserialize)]
 struct ConfigFile {
+    #[serde(default)]
     commands: Vec<RawCommand>,
+    editor: Option<String>,
 }
 
-pub(crate) fn read_config(path: &Path) -> Result<Vec<Command>> {
+#[derive(Debug, Clone)]
+pub(crate) struct RunbookConfig {
+    pub(crate) commands: Vec<Command>,
+    pub(crate) editor: Option<String>,
+}
+
+pub(crate) fn read_config(path: &Path) -> Result<RunbookConfig> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read config {}", path.display()))?;
     let config: ConfigFile = toml::from_str(&content)
@@ -40,5 +48,24 @@ pub(crate) fn read_config(path: &Path) -> Result<Vec<Command>> {
             command: raw.command,
         });
     }
-    Ok(commands)
+    Ok(RunbookConfig {
+        commands,
+        editor: config.editor.filter(|s| !s.is_empty()),
+    })
+}
+
+pub(crate) fn load_global_editor() -> Option<String> {
+    let path = dirs::config_dir()?.join("runbook-tui").join("config.toml");
+    let content = fs::read_to_string(path).ok()?;
+    let config: ConfigFile = toml::from_str(&content).ok()?;
+    config.editor.filter(|s| !s.is_empty())
+}
+
+pub(crate) fn resolve_editor(file_editor: Option<String>, global_editor: Option<String>) -> String {
+    file_editor
+        .filter(|s| !s.is_empty())
+        .or(global_editor.filter(|s| !s.is_empty()))
+        .or_else(|| std::env::var("VISUAL").ok().filter(|s| !s.is_empty()))
+        .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| "vi".to_string())
 }
