@@ -7,9 +7,9 @@ use anyhow::Result;
 use crossterm::event::DisableMouseCapture;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
-use ratatui::backend::CrosstermBackend;
-use ratatui::buffer::CellWidth;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::backend::{Backend, ClearType, CrosstermBackend, WindowSize};
+use ratatui::buffer::{Cell, CellWidth};
+use ratatui::layout::{Constraint, Layout, Position, Rect, Size};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs};
@@ -20,8 +20,102 @@ use unicode_width::UnicodeWidthChar;
 use crate::app::{App, AppMode, Focus, InputMode};
 use crate::theme::Theme;
 
+/// Wrapper around [`CrosstermBackend`] that works around a cursor-positioning bug
+/// with multi-width characters (CJK, emoji) in the upstream `0.1.2` backend.
+/// It filters out cells that are covered by a previous wide grapheme before
+/// delegating the draw to the real backend, preventing extra whitespace and
+/// border misalignment in CJK locales.
+pub(crate) struct FixedCrosstermBackend<W: Write> {
+    inner: CrosstermBackend<W>,
+}
+
+impl<W: Write> FixedCrosstermBackend<W> {
+    pub(crate) fn new(inner: CrosstermBackend<W>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<W: Write> Write for FixedCrosstermBackend<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        std::io::Write::flush(&mut self.inner)
+    }
+}
+
+impl<W: Write> Backend for FixedCrosstermBackend<W> {
+    type Error = io::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        let mut next_pos: Option<Position> = None;
+        let mut skip_covered_cells = false;
+        let filtered: Vec<(u16, u16, &'a Cell)> = content
+            .filter(|(x, y, cell)| {
+                if skip_covered_cells
+                    && matches!(next_pos, Some(pos) if *y == pos.y && *x < pos.x)
+                {
+                    return false;
+                }
+                let width = cell.cell_width();
+                next_pos = Some(Position {
+                    x: x.saturating_add(width),
+                    y: *y,
+                });
+                skip_covered_cells = width > 1 && !cell.symbol().contains('\u{FE0F}');
+                true
+            })
+            .collect();
+        self.inner.draw(filtered.into_iter())
+    }
+
+    fn hide_cursor(&mut self) -> io::Result<()> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> io::Result<()> {
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> io::Result<Position> {
+        self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> io::Result<()> {
+        self.inner.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
+        self.inner.clear_region(clear_type)
+    }
+
+    fn size(&self) -> io::Result<Size> {
+        self.inner.size()
+    }
+
+    fn window_size(&mut self) -> io::Result<WindowSize> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Backend::flush(&mut self.inner)
+    }
+
+    fn append_lines(&mut self, n: u16) -> io::Result<()> {
+        self.inner.append_lines(n)
+    }
+}
+
 pub(crate) struct TerminalGuard {
-    terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    terminal: Terminal<FixedCrosstermBackend<io::Stdout>>,
 }
 
 impl TerminalGuard {
@@ -30,11 +124,11 @@ impl TerminalGuard {
         let mut stdout = stdout();
         stdout.execute(EnterAlternateScreen)?;
         stdout.execute(DisableMouseCapture)?;
-        let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+        let terminal = Terminal::new(FixedCrosstermBackend::new(CrosstermBackend::new(stdout)))?;
         Ok(Self { terminal })
     }
 
-    pub(crate) fn terminal(&mut self) -> &mut Terminal<CrosstermBackend<io::Stdout>> {
+    pub(crate) fn terminal(&mut self) -> &mut Terminal<FixedCrosstermBackend<io::Stdout>> {
         &mut self.terminal
     }
 
