@@ -182,7 +182,7 @@ fn render_message(app: &App, frame: &mut Frame, area: Rect) {
         app.theme.success
     };
     let paragraph = Paragraph::new(app.message.as_str())
-        .block(Block::default().borders(Borders::ALL).border_style(style))
+        .block(with_cjk_border(Block::default()).borders(Borders::ALL).border_style(style))
         .style(style);
     frame.render_widget(paragraph, popup);
 }
@@ -239,7 +239,7 @@ fn render_search(app: &App, frame: &mut Frame, area: Rect) {
 
     let paragraph = Paragraph::new(text)
         .block(
-            Block::default()
+            with_cjk_border(Block::default())
                 .title(t!("ui.search_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(style),
@@ -259,7 +259,7 @@ fn render_import(app: &mut App, frame: &mut Frame, area: Rect) {
     };
 
     frame.render_widget(Clear, popup);
-    let block = Block::default()
+    let block = with_cjk_border(Block::default())
         .title(t!("ui.open_file_title", path = app.import_cwd.display().to_string()).to_string())
         .borders(Borders::ALL);
     let inner = block.inner(popup);
@@ -280,7 +280,7 @@ fn render_import(app: &mut App, frame: &mut Frame, area: Rect) {
     };
     let filter_paragraph = Paragraph::new(filter_text)
         .block(
-            Block::default()
+            with_cjk_border(Block::default())
                 .title(t!("ui.filter_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(filter_style),
@@ -303,7 +303,7 @@ fn render_import(app: &mut App, frame: &mut Frame, area: Rect) {
 
     let list_title = app.import_message.clone();
     let list = List::new(items)
-        .block(Block::default().title(list_title).borders(Borders::ALL))
+        .block(with_cjk_border(Block::default()).title(list_title).borders(Borders::ALL))
         .highlight_style(app.theme.highlight)
         .highlight_symbol("> ");
     frame.render_stateful_widget(list, list_area, &mut app.import_state);
@@ -320,7 +320,7 @@ fn render_environment_select(app: &mut App, frame: &mut Frame, area: Rect) {
     };
 
     frame.render_widget(Clear, popup);
-    let block = Block::default()
+    let block = with_cjk_border(Block::default())
         .title(t!("ui.environment_title", label = app.environment_label()).to_string())
         .borders(Borders::ALL)
         .border_style(app.theme.focused);
@@ -334,7 +334,7 @@ fn render_environment_select(app: &mut App, frame: &mut Frame, area: Rect) {
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::NONE))
+        .block(with_cjk_border(Block::default()).borders(Borders::NONE))
         .highlight_style(app.theme.highlight)
         .highlight_symbol("> ");
     frame.render_stateful_widget(list, inner, &mut app.environment_state);
@@ -344,7 +344,7 @@ fn render_tabs(app: &App, frame: &mut Frame, area: Rect) {
     let selected = app.tab_idx.min(app.tab_titles.len().saturating_sub(1));
     let tabs = Tabs::new(app.tab_titles.clone())
         .select(selected)
-        .block(Block::default().borders(Borders::ALL))
+        .block(with_cjk_border(Block::default()).borders(Borders::ALL))
         .style(app.theme.border)
         .highlight_style(app.theme.highlight);
     frame.render_widget(tabs, area);
@@ -361,7 +361,7 @@ fn render_tab_select(app: &mut App, frame: &mut Frame, area: Rect) {
     };
 
     frame.render_widget(Clear, popup);
-    let block = Block::default()
+    let block = with_cjk_border(Block::default())
         .title(t!("ui.select_tab_title").to_string())
         .borders(Borders::ALL)
         .border_style(app.theme.focused);
@@ -375,7 +375,7 @@ fn render_tab_select(app: &mut App, frame: &mut Frame, area: Rect) {
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::NONE))
+        .block(with_cjk_border(Block::default()).borders(Borders::NONE))
         .highlight_style(app.theme.highlight)
         .highlight_symbol("> ");
     frame.render_stateful_widget(list, inner, &mut app.tab_select_state);
@@ -401,7 +401,7 @@ fn render_commands(app: &mut App, frame: &mut Frame, area: Rect) {
     let commands_focused = app.focus == Focus::Commands;
     let list = List::new(items)
         .block(
-            Block::default()
+            with_cjk_border(Block::default())
                 .title(t!("ui.runbook_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(if commands_focused {
@@ -438,7 +438,7 @@ fn render_apis(app: &mut App, frame: &mut Frame, area: Rect) {
     let apis_focused = app.focus == Focus::Commands;
     let list = List::new(items)
         .block(
-            Block::default()
+            with_cjk_border(Block::default())
                 .title(t!("ui.apis_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(if apis_focused {
@@ -505,7 +505,7 @@ fn render_variables(app: &mut App, frame: &mut Frame, area: Rect) {
     let focused = app.focus == Focus::Variables;
     let list = List::new(items)
         .block(
-            Block::default()
+            with_cjk_border(Block::default())
                 .title(title)
                 .borders(Borders::ALL)
                 .border_style(if focused {
@@ -526,6 +526,7 @@ fn render_processes(app: &mut App, frame: &mut Frame, area: Rect) {
         .iter()
         .map(|p| {
             let (sym, style) = p.status.indicator(&app.theme);
+            let sym = cjk_safe_status_symbol(sym);
             let line = Line::from(vec![
                 Span::styled(sym, style),
                 Span::raw(" "),
@@ -539,7 +540,7 @@ fn render_processes(app: &mut App, frame: &mut Frame, area: Rect) {
     let processes_focused = app.focus == Focus::Processes;
     let list = List::new(items)
         .block(
-            Block::default()
+            with_cjk_border(Block::default())
                 .title(t!("ui.processes_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(if processes_focused {
@@ -555,15 +556,23 @@ fn render_processes(app: &mut App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_requests(app: &mut App, frame: &mut Frame, area: Rect) {
+    let method_width = app
+        .api_requests
+        .iter()
+        .map(|r| r.method.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(4);
     let items: Vec<ListItem> = app
         .api_requests
         .iter()
         .map(|r| {
             let (sym, style) = r.status.indicator(&app.theme);
+            let sym = cjk_safe_status_symbol(sym);
             let line = Line::from(vec![
                 Span::styled(sym, style),
                 Span::raw(" "),
-                Span::raw(format!("{} {}", r.method, r.url)),
+                Span::raw(format!("{:method_width$} {}", r.method, r.url)),
                 Span::raw(t!("ui.status_suffix", label = r.status.label()).to_string()),
             ]);
             ListItem::new(line)
@@ -573,7 +582,7 @@ fn render_requests(app: &mut App, frame: &mut Frame, area: Rect) {
     let requests_focused = app.focus == Focus::Processes;
     let list = List::new(items)
         .block(
-            Block::default()
+            with_cjk_border(Block::default())
                 .title(t!("ui.requests_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(if requests_focused {
@@ -613,7 +622,7 @@ fn render_api_response(app: &mut App, frame: &mut Frame, area: Rect) {
     };
 
     let request_headers_paragraph = Paragraph::new(request_headers_text)
-        .block(Block::default().title(t!("ui.request_headers_title").to_string()).borders(Borders::ALL));
+        .block(with_cjk_border(Block::default()).title(t!("ui.request_headers_title").to_string()).borders(Borders::ALL));
     frame.render_widget(request_headers_paragraph, request_headers_area);
 
     app.request_body_area_height = request_body_area.height.saturating_sub(2);
@@ -639,7 +648,7 @@ fn render_api_response(app: &mut App, frame: &mut Frame, area: Rect) {
         .collect();
     let request_list = List::new(request_items)
         .block(
-            Block::default()
+            with_cjk_border(Block::default())
                 .title(t!("ui.request_body_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(if request_body_focused {
@@ -666,7 +675,7 @@ fn render_api_response(app: &mut App, frame: &mut Frame, area: Rect) {
     };
 
     let response_headers_paragraph = Paragraph::new(response_headers_text)
-        .block(Block::default().title(t!("ui.response_headers_title").to_string()).borders(Borders::ALL));
+        .block(with_cjk_border(Block::default()).title(t!("ui.response_headers_title").to_string()).borders(Borders::ALL));
     frame.render_widget(response_headers_paragraph, response_headers_area);
 
     app.log_area_height = response_body_area.height.saturating_sub(2);
@@ -693,7 +702,7 @@ fn render_api_response(app: &mut App, frame: &mut Frame, area: Rect) {
         .collect();
     let response_list = List::new(response_items)
         .block(
-            Block::default()
+            with_cjk_border(Block::default())
                 .title(t!("ui.response_body_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(if response_body_focused {
@@ -809,7 +818,7 @@ fn render_help(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, popup);
     let items: Vec<ListItem> = lines.into_iter().map(ListItem::new).collect();
     let list = List::new(items)
-        .block(Block::default().title(t!("ui.help_title").to_string()).borders(Borders::ALL));
+        .block(with_cjk_border(Block::default()).title(t!("ui.help_title").to_string()).borders(Borders::ALL));
     frame.render_widget(list, popup);
 }
 
@@ -843,7 +852,7 @@ fn render_log(app: &mut App, frame: &mut Frame, area: Rect) {
     let items: Vec<ListItem> = lines.into_iter().map(ListItem::new).collect();
     let list = List::new(items)
         .block(
-            Block::default()
+            with_cjk_border(Block::default())
                 .title(title)
                 .borders(Borders::ALL)
                 .border_style(if output_focused {
@@ -1036,6 +1045,45 @@ pub(crate) fn colorize_body(
         .map(|l| colorize_line(content_type, l, theme))
         .collect();
     wrap_colored_lines(source, width)
+}
+
+fn is_cjk_locale() -> bool {
+    let locale = rust_i18n::locale();
+    let locale = &*locale;
+    locale.starts_with("zh") || locale.starts_with("ja") || locale.starts_with("ko")
+}
+
+/// CJK terminals may render status symbols with ambiguous East-Asian width
+/// (e.g. `●`, `✓`, `✗` may be two cells). Use ASCII alternatives in CJK
+/// locales so ratatui and the terminal agree on the symbol width.
+fn cjk_safe_status_symbol(sym: &str) -> &str {
+    if !is_cjk_locale() {
+        return sym;
+    }
+    match sym {
+        "●" => "*",
+        "✓" => "+",
+        "✗" => "!",
+        _ => sym,
+    }
+}
+
+const ASCII_BORDER: ratatui::symbols::border::Set<'static> = ratatui::symbols::border::Set {
+    top_left: "+",
+    top_right: "+",
+    bottom_left: "+",
+    bottom_right: "+",
+    vertical_left: "|",
+    vertical_right: "|",
+    horizontal_top: "-",
+    horizontal_bottom: "-",
+};
+
+fn with_cjk_border<'a>(mut block: ratatui::widgets::Block<'a>) -> ratatui::widgets::Block<'a> {
+    if is_cjk_locale() {
+        block = block.border_set(ASCII_BORDER);
+    }
+    block
 }
 
 fn wrap_lines(output: &VecDeque<String>, width: u16) -> Vec<String> {
