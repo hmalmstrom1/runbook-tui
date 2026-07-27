@@ -331,9 +331,13 @@ Press `F4` to edit the current tab's source file in an external editor. The edit
 2. An `editor` field in `~/.config/runbook-tui/config.toml`.
 3. The `VISUAL` environment variable.
 4. The `EDITOR` environment variable.
-5. `vi` as a final fallback.
+5. `vim` as a fallback.
+6. `vi` as a fallback.
+7. `emacs` as a final fallback.
 
-For example, in `runbook.toml`:
+The `editor` value is executed through the shell, so it can include arguments. The file path is appended as the last argument and is safely quoted by `rbt`.
+
+Runbook-local editor in `runbook.toml`:
 
 ```toml
 editor = "vim"
@@ -344,7 +348,20 @@ keybinding = "p"
 command = "ping -c 3 127.0.0.1"
 ```
 
-Editors with arguments (such as `code -w` or `subl -n`) are supported.
+Global editor in `~/.config/runbook-tui/config.toml`:
+
+```toml
+editor = "code -w"
+```
+
+Other examples:
+
+- `editor = "subl -n"` — open in Sublime Text in a new window.
+- `editor = "nvim"` — open in Neovim.
+- `editor = "kitty -- nvim"` — open in a new Kitty terminal running Neovim.
+- `editor = "'/Applications/Visual Studio Code.app/Contents/MacOS/Electron' -n"` — open a macOS `.app` bundle executable (quote the path because it contains spaces). Use a wait flag if the editor has one, otherwise `rbt` resumes immediately.
+
+If the configured `editor` resolves to a directory (for example, an `.app` bundle path without the inner executable), `rbt` shows an error. Point `editor` at the actual executable inside the bundle.
 
 ### API collection notes
 

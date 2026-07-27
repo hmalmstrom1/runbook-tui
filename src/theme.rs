@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use ratatui::style::{Color, Modifier, Style};
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy)]
@@ -61,7 +62,7 @@ pub(crate) fn load_saved_theme_name() -> Option<String> {
 
 pub(crate) fn save_theme_name(name: &str) -> std::io::Result<()> {
     let dir = config_dir().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "no config directory")
+        std::io::Error::new(std::io::ErrorKind::NotFound, t!("theme.no_config_directory").to_string())
     })?;
     fs::create_dir_all(&dir)?;
     let path = dir.join("theme.toml");

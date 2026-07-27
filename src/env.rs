@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use rust_i18n::t;
 use serde::Deserialize;
 
 type VariableList = Vec<(String, String)>;
@@ -49,9 +50,9 @@ fn take_env_value(v: EnvValue) -> (String, bool) {
 
 pub(crate) fn parse_variable_groups(path: &Path) -> Result<ParsedEnvGroups> {
     let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read variable group file {}", path.display()))?;
+        .with_context(|| t!("env.read_error", path = path.display().to_string()).to_string())?;
     let file: VariableGroupFile = serde_json::from_str(&content)
-        .with_context(|| "Failed to parse variable group file as JSON")?;
+        .with_context(|| t!("env.parse_json_error").to_string())?;
 
     let mut groups = Vec::new();
     let mut secret_keys = BTreeSet::new();
@@ -73,7 +74,7 @@ pub(crate) fn parse_variable_groups(path: &Path) -> Result<ParsedEnvGroups> {
             }
             vars.push((v.key, v.value));
         }
-        groups.push(("default".to_string(), vars));
+        groups.push((t!("environment.default_name").to_string(), vars));
     }
 
     for (name, vars) in file.environments {

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
+use rust_i18n::t;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::api::{self, ApiItem, ApiRequest, ApiStatus, format_body, run_api_request};
@@ -37,9 +38,9 @@ impl ProcessStatus {
 
     pub(crate) fn label(&self) -> String {
         match self {
-            ProcessStatus::Running => "running".to_string(),
-            ProcessStatus::Exited(c) => format!("exit {}", c),
-            ProcessStatus::Failed(e) => format!("failed: {}", e),
+            ProcessStatus::Running => t!("process.status.running").to_string(),
+            ProcessStatus::Exited(c) => t!("process.status.exit", code = c.to_string()).to_string(),
+            ProcessStatus::Failed(e) => t!("process.status.failed", error = e).to_string(),
         }
     }
 }
@@ -356,9 +357,9 @@ impl App {
             .selected_environment
             .and_then(|idx| self.environments.get(idx))
             .map(|(name, _)| name.clone())
-            .unwrap_or_else(|| "collection".to_string());
+            .unwrap_or_else(|| t!("environment.collection").to_string());
         if self.env_overlay {
-            format!("{} + env", base)
+            t!("environment.plus_env", base = base).to_string()
         } else {
             base
         }
@@ -379,16 +380,16 @@ impl App {
     }
 
     pub(crate) fn environment_choices(&self) -> Vec<(String, EnvironmentChoice)> {
-        let mut choices = vec![("collection".to_string(), EnvironmentChoice::Collection)];
+        let mut choices = vec![(t!("environment.collection").to_string(), EnvironmentChoice::Collection)];
         for (idx, (name, _)) in self.environments.iter().enumerate() {
             choices.push((name.clone(), EnvironmentChoice::Environment(idx)));
         }
-        choices.push(("Import env group...".to_string(), EnvironmentChoice::ImportEnvGroup));
+        choices.push((t!("environment.import_group").to_string(), EnvironmentChoice::ImportEnvGroup));
         if self.environment_overlay_available() {
             let label = if self.env_overlay {
-                "[x] env overlay"
+                t!("environment.overlay_checked")
             } else {
-                "[ ] env overlay"
+                t!("environment.overlay_unchecked")
             };
             choices.push((label.to_string(), EnvironmentChoice::ToggleEnvOverlay));
         }
@@ -588,8 +589,8 @@ impl App {
         self.theme_name = names[next].to_string();
         self.theme = crate::theme::theme_by_name(names[next]);
         match crate::theme::save_theme_name(&self.theme_name) {
-            Ok(()) => self.set_message(format!("Theme: {}", self.theme_name)),
-            Err(e) => self.set_message(format!("Theme changed, save failed: {}", e)),
+            Ok(()) => self.set_message(t!("message.theme_changed", name = self.theme_name.clone()).to_string()),
+            Err(e) => self.set_message(t!("message.theme_save_failed", error = e).to_string()),
         }
     }
 
@@ -616,21 +617,25 @@ impl App {
             AppMode::Api => self.export_api_output(),
         };
         match result {
-            Ok(path) => self.set_message(format!("Exported to {}", path.display())),
-            Err(e) => self.set_message(format!("Export failed: {}", e)),
+            Ok(path) => self.set_message(t!("message.exported", path = path.display().to_string()).to_string()),
+            Err(e) => self.set_message(t!("message.export_failed", error = e).to_string()),
         }
     }
 
     fn export_runbook_output(&mut self) -> std::io::Result<PathBuf> {
         let process = self
             .selected_process()
-            .ok_or_else(|| std::io::Error::other("No process selected"))?;
+            .ok_or_else(|| std::io::Error::other(t!("export.no_process_selected").to_string()))?;
         let timestamp = self.export_timestamp();
         let filename = format!("rbt-export-runbook-{}.txt", timestamp);
         let path = env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(&filename);
 
         let output = process.output.iter().cloned().collect::<Vec<_>>().join("\n");
-        let content = format!("Command: {}\n\nOutput:\n{}", process._command, output);
+        let content = t!(
+            "export.runbook_template",
+            command = process._command.clone(),
+            output = output
+        ).to_string();
         fs::write(&path, content)?;
         Ok(path)
     }
@@ -638,7 +643,7 @@ impl App {
     fn export_api_output(&mut self) -> std::io::Result<PathBuf> {
         let request = self
             .selected_request()
-            .ok_or_else(|| std::io::Error::other("No request selected"))?;
+            .ok_or_else(|| std::io::Error::other(t!("export.no_request_selected").to_string()))?;
         let timestamp = self.export_timestamp();
         let filename = format!("rbt-export-api-{}.txt", timestamp);
         let path = env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(&filename);
@@ -647,32 +652,32 @@ impl App {
         let response_body = request.body.iter().cloned().collect::<Vec<_>>().join("\n");
         let status_line = match &request.status {
             ApiStatus::Done(_) => String::new(),
-            ApiStatus::Running => "Running".to_string(),
-            ApiStatus::Failed(e) => format!("Failed: {}", e),
+            ApiStatus::Running => t!("api.status.running").to_string(),
+            ApiStatus::Failed(e) => t!("api.status.failed", error = e).to_string(),
         };
         let response_headers = request.headers.clone();
 
         let content = if status_line.is_empty() {
-            format!(
-                "Request\n=======\n{} {}\n\n{}\n\n{}\n\nResponse\n========\n{}\n\n{}",
-                request.method,
-                request.url,
-                request.request_headers,
-                request_body,
-                response_headers,
-                response_body
-            )
+            t!(
+                "export.api_template",
+                method = request.method.clone(),
+                url = request.url.clone(),
+                request_headers = request.request_headers.clone(),
+                request_body = request_body,
+                response_headers = response_headers,
+                response_body = response_body
+            ).to_string()
         } else {
-            format!(
-                "Request\n=======\n{} {}\n\n{}\n\n{}\n\nResponse\n========\n{}\n\n{}\n\n{}",
-                request.method,
-                request.url,
-                request.request_headers,
-                request_body,
-                status_line,
-                response_headers,
-                response_body
-            )
+            t!(
+                "export.api_template_with_status",
+                method = request.method.clone(),
+                url = request.url.clone(),
+                request_headers = request.request_headers.clone(),
+                request_body = request_body,
+                status_line = status_line,
+                response_headers = response_headers,
+                response_body = response_body
+            ).to_string()
         };
         fs::write(&path, content)?;
         Ok(path)
@@ -740,7 +745,7 @@ impl App {
         self.import_path = PathBuf::new();
         self.import_filter.clear();
         self.import_cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        self.import_message = "Type to filter, ↑/↓ to select, Enter to open".to_string();
+        self.import_message = t!("import.type_to_filter").to_string();
         self.import_error = false;
         self.refresh_import_entries();
         self.import_state.select(Some(0));
@@ -752,7 +757,7 @@ impl App {
         self.import_path = PathBuf::new();
         self.import_filter.clear();
         self.import_cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        self.import_message = "Select an env group JSON file".to_string();
+        self.import_message = t!("import.select_env_group").to_string();
         self.import_error = false;
         self.refresh_import_entries();
         self.import_state.select(Some(0));
@@ -765,7 +770,7 @@ impl App {
         self.import_path = PathBuf::new();
         self.import_filter.clear();
         self.import_cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        self.import_message = "Select a file to open in a new tab".to_string();
+        self.import_message = t!("import.select_new_tab").to_string();
         self.import_error = false;
         self.refresh_import_entries();
         self.import_state.select(Some(0));
@@ -854,11 +859,11 @@ impl App {
                 files.sort_by_key(|a| a.name.to_lowercase());
                 self.import_entries.append(&mut dirs);
                 self.import_entries.append(&mut files);
-                self.import_message = format!("{} items", self.import_entries.len());
+                self.import_message = t!("import.items_count", count = self.import_entries.len().to_string()).to_string();
                 self.import_error = false;
             }
             Err(e) => {
-                self.import_message = format!("Error: {}", e);
+                self.import_message = t!("message.error", error = e).to_string();
                 self.import_error = true;
             }
         }
@@ -909,10 +914,10 @@ impl App {
                     self.recompute_variables();
                     self.importing_env_group = false;
                     self.input_mode = InputMode::EnvironmentSelect;
-                    self.set_message("Env group imported");
+                    self.set_message(t!("message.env_group_imported").to_string());
                 }
                 Err(e) => {
-                    self.import_message = format!("Error: {}", e);
+                    self.import_message = t!("message.error", error = e).to_string();
                     self.import_error = true;
                 }
             }
@@ -945,7 +950,7 @@ impl App {
             self.tab_title = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string_lossy().to_string());
             self.input_mode = InputMode::Normal;
         } else if let Err(e) = result {
-            self.import_message = format!("Error: {}", e);
+            self.import_message = t!("message.error", error = e).to_string();
             self.import_error = true;
         }
     }

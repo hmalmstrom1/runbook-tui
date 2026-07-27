@@ -14,6 +14,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs};
 use ratatui::{Frame, Terminal};
+use rust_i18n::t;
 use unicode_width::UnicodeWidthChar;
 
 use crate::app::{App, AppMode, Focus, InputMode};
@@ -51,7 +52,7 @@ impl TerminalGuard {
 
         let status = result?;
         if !status.success() {
-            return Err(std::io::Error::other(format!("editor exited with {}", status)));
+            return Err(std::io::Error::other(t!("ui.editor_exit_error", status = status.to_string()).to_string()));
         }
         Ok(())
     }
@@ -61,15 +62,12 @@ fn run_editor_command(path: &Path, editor: &str) -> std::io::Result<ExitStatus> 
     let program = editor
         .split_whitespace()
         .next()
-        .ok_or_else(|| std::io::Error::other("no editor configured"))?;
+        .ok_or_else(|| std::io::Error::other(t!("ui.no_editor_configured").to_string()))?;
     if program.contains(std::path::MAIN_SEPARATOR)
         && let Ok(meta) = std::fs::metadata(program)
         && meta.is_dir()
     {
-        return Err(std::io::Error::other(format!(
-            "editor path is a directory: {}",
-            program
-        )));
+        return Err(std::io::Error::other(t!("ui.editor_is_directory", path = program.to_string()).to_string()));
     }
     let cmd = format!("{} {}", editor, sh_quote_path(path));
     Command::new("sh").arg("-c").arg(cmd).status()
@@ -93,7 +91,7 @@ pub(crate) fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let _ = disable_raw_mode();
         let _ = crossterm::execute!(std::io::stdout(), LeaveAlternateScreen);
-        eprintln!("Application panicked: {info}");
+        eprintln!("{}", t!("ui.panic_message", info = info.to_string()));
     }));
 }
 
@@ -178,7 +176,7 @@ fn render_message(app: &App, frame: &mut Frame, area: Rect) {
     };
 
     frame.render_widget(Clear, popup);
-    let style = if app.message.starts_with("Export failed") {
+    let style = if app.message.starts_with(t!("message.export_failed", error = "").as_ref()) {
         app.theme.error
     } else {
         app.theme.success
@@ -233,16 +231,16 @@ fn render_search(app: &App, frame: &mut Frame, area: Rect) {
     }
     let search_focused = app.focus == Focus::Commands && app.input_mode == InputMode::Search;
     let hint = match app.app_mode {
-        AppMode::Runbook => "Type / to search, Enter to run, F4 edit source, Ctrl+E export, Ctrl+O open file, Tab/Shift-Tab panes, PgUp/Dn scroll output",
-        AppMode::Api => "Type / to search APIs, Enter to send/edit, F4 edit source, Ctrl+E export, Ctrl+G env, Ctrl+O open file, Tab/Shift-Tab panes, PgUp/Dn scroll body",
+        AppMode::Runbook => t!("ui.search_hint.runbook").to_string(),
+        AppMode::Api => t!("ui.search_hint.api").to_string(),
     };
-    let text = if app.search.is_empty() { hint } else { &app.search };
+    let text = if app.search.is_empty() { hint.as_str() } else { app.search.as_str() };
     let style = if search_focused { app.theme.input } else { app.theme.border };
 
     let paragraph = Paragraph::new(text)
         .block(
             Block::default()
-                .title("Search")
+                .title(t!("ui.search_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(style),
         )
@@ -262,7 +260,7 @@ fn render_import(app: &mut App, frame: &mut Frame, area: Rect) {
 
     frame.render_widget(Clear, popup);
     let block = Block::default()
-        .title(format!("Open File - {}", app.import_cwd.display()))
+        .title(t!("ui.open_file_title", path = app.import_cwd.display().to_string()).to_string())
         .borders(Borders::ALL);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -276,14 +274,14 @@ fn render_import(app: &mut App, frame: &mut Frame, area: Rect) {
         app.theme.focused
     };
     let filter_text = if app.import_filter.is_empty() {
-        "Type to filter...".to_string()
+        t!("ui.filter_placeholder").to_string()
     } else {
         app.import_filter.clone()
     };
     let filter_paragraph = Paragraph::new(filter_text)
         .block(
             Block::default()
-                .title("Filter")
+                .title(t!("ui.filter_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(filter_style),
         )
@@ -298,7 +296,7 @@ fn render_import(app: &mut App, frame: &mut Frame, area: Rect) {
         .import_entries
         .iter()
         .map(|e| {
-            let prefix = if e.is_dir { "[dir]  " } else { "       " };
+            let prefix = if e.is_dir { t!("ui.dir_prefix").to_string() } else { "       ".to_string() };
             ListItem::new(format!("{}{}", prefix, e.name))
         })
         .collect();
@@ -323,7 +321,7 @@ fn render_environment_select(app: &mut App, frame: &mut Frame, area: Rect) {
 
     frame.render_widget(Clear, popup);
     let block = Block::default()
-        .title(format!("Environment (current: {})", app.environment_label()))
+        .title(t!("ui.environment_title", label = app.environment_label()).to_string())
         .borders(Borders::ALL)
         .border_style(app.theme.focused);
     let inner = block.inner(popup);
@@ -364,7 +362,7 @@ fn render_tab_select(app: &mut App, frame: &mut Frame, area: Rect) {
 
     frame.render_widget(Clear, popup);
     let block = Block::default()
-        .title("Select Tab")
+        .title(t!("ui.select_tab_title").to_string())
         .borders(Borders::ALL)
         .border_style(app.theme.focused);
     let inner = block.inner(popup);
@@ -404,7 +402,7 @@ fn render_commands(app: &mut App, frame: &mut Frame, area: Rect) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title("Runbook")
+                .title(t!("ui.runbook_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(if commands_focused {
                     app.theme.focused
@@ -441,7 +439,7 @@ fn render_apis(app: &mut App, frame: &mut Frame, area: Rect) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title("APIs")
+                .title(t!("ui.apis_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(if apis_focused {
                     app.theme.focused
@@ -459,22 +457,24 @@ fn mask_secret(value: &str) -> String {
     if value.is_empty() {
         String::new()
     } else {
-        "********".to_string()
+        t!("ui.secret_mask").to_string()
     }
 }
 
 fn render_variables(app: &mut App, frame: &mut Frame, area: Rect) {
     let editing = app.variable_edit_index;
     let title = if let Some(i) = editing {
-        format!(
-            "Editing: {}",
-            app.variables.get(i).map(|(n, _)| n.as_str()).unwrap_or("")
+        t!(
+            "ui.variables_editing",
+            name = app.variables.get(i).map(|(n, _)| n.as_str()).unwrap_or("")
         )
+        .to_string()
     } else {
-        format!(
-            "Variables (env: {}) (Enter to edit)",
-            app.environment_label()
+        t!(
+            "ui.variables_title",
+            label = app.environment_label()
         )
+        .to_string()
     };
 
     let items: Vec<ListItem> = app
@@ -489,14 +489,14 @@ fn render_variables(app: &mut App, frame: &mut Frame, area: Rect) {
                 } else {
                     app.variable_edit_value.clone()
                 };
-                format!("{}: {}", name, shown)
+                t!("ui.variable_edit_format", name = name.as_str(), value = shown.as_str()).to_string()
             } else {
                 let shown = if secret {
                     mask_secret(value)
                 } else {
                     value.clone()
                 };
-                format!("{} = {}", name, shown)
+                t!("ui.variable_format", name = name.as_str(), value = shown.as_str()).to_string()
             };
             ListItem::new(text)
         })
@@ -530,7 +530,7 @@ fn render_processes(app: &mut App, frame: &mut Frame, area: Rect) {
                 Span::styled(sym, style),
                 Span::raw(" "),
                 Span::raw(p.title.clone()),
-                Span::raw(format!(" ({})", p.status.label())),
+                Span::raw(t!("ui.status_suffix", label = p.status.label()).to_string()),
             ]);
             ListItem::new(line)
         })
@@ -540,7 +540,7 @@ fn render_processes(app: &mut App, frame: &mut Frame, area: Rect) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title("Processes")
+                .title(t!("ui.processes_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(if processes_focused {
                     app.theme.focused
@@ -564,7 +564,7 @@ fn render_requests(app: &mut App, frame: &mut Frame, area: Rect) {
                 Span::styled(sym, style),
                 Span::raw(" "),
                 Span::raw(format!("{} {}", r.method, r.url)),
-                Span::raw(format!(" ({})", r.status.label())),
+                Span::raw(t!("ui.status_suffix", label = r.status.label()).to_string()),
             ]);
             ListItem::new(line)
         })
@@ -574,7 +574,7 @@ fn render_requests(app: &mut App, frame: &mut Frame, area: Rect) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title("Requests")
+                .title(t!("ui.requests_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(if requests_focused {
                     app.theme.focused
@@ -609,11 +609,11 @@ fn render_api_response(app: &mut App, frame: &mut Frame, area: Rect) {
             ),
         )
     } else {
-        (String::new(), vec![Line::from("No request selected")])
+        (String::new(), vec![Line::from(t!("ui.no_request_selected").to_string())])
     };
 
     let request_headers_paragraph = Paragraph::new(request_headers_text)
-        .block(Block::default().title("Request Headers").borders(Borders::ALL));
+        .block(Block::default().title(t!("ui.request_headers_title").to_string()).borders(Borders::ALL));
     frame.render_widget(request_headers_paragraph, request_headers_area);
 
     app.request_body_area_height = request_body_area.height.saturating_sub(2);
@@ -640,7 +640,7 @@ fn render_api_response(app: &mut App, frame: &mut Frame, area: Rect) {
     let request_list = List::new(request_items)
         .block(
             Block::default()
-                .title("Request Body")
+                .title(t!("ui.request_body_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(if request_body_focused {
                     app.theme.focused
@@ -662,11 +662,11 @@ fn render_api_response(app: &mut App, frame: &mut Frame, area: Rect) {
             ),
         )
     } else {
-        (String::new(), vec![Line::from("No request selected")])
+        (String::new(), vec![Line::from(t!("ui.no_request_selected").to_string())])
     };
 
     let response_headers_paragraph = Paragraph::new(response_headers_text)
-        .block(Block::default().title("Response Headers").borders(Borders::ALL));
+        .block(Block::default().title(t!("ui.response_headers_title").to_string()).borders(Borders::ALL));
     frame.render_widget(response_headers_paragraph, response_headers_area);
 
     app.log_area_height = response_body_area.height.saturating_sub(2);
@@ -694,7 +694,7 @@ fn render_api_response(app: &mut App, frame: &mut Frame, area: Rect) {
     let response_list = List::new(response_items)
         .block(
             Block::default()
-                .title("Response Body")
+                .title(t!("ui.response_body_title").to_string())
                 .borders(Borders::ALL)
                 .border_style(if response_body_focused {
                     app.theme.focused
@@ -706,84 +706,88 @@ fn render_api_response(app: &mut App, frame: &mut Frame, area: Rect) {
     frame.render_stateful_widget(response_list, response_body_area, &mut app.log_state);
 }
 
+fn help_line(key: &str, desc: &str) -> String {
+    format!("  {:<22}{}", key, desc)
+}
+
 fn help_lines(app: &App) -> Vec<String> {
     let mut lines = vec![
-        "Global:".to_string(),
-        "  ?            toggle this help".to_string(),
-        "  Tab          cycle focus forward".to_string(),
-        "  Shift+Tab    cycle focus backward".to_string(),
-        "  m            maximize / restore focused pane".to_string(),
-        "  Ctrl+E       export selected output".to_string(),
-        "  Ctrl+G       switch API environment".to_string(),
-        "  Ctrl+O       open file".to_string(),
-        "  F2           switch tab (or pick from list)".to_string(),
-        "  Ctrl+Left    previous tab".to_string(),
-        "  Ctrl+Right   next tab".to_string(),
-        "  F3           open file in new tab".to_string(),
-        "  F4           edit source file".to_string(),
-        "  Ctrl+T       cycle theme".to_string(),
-        "  Ctrl+C       quit".to_string(),
-        "  Ctrl+N       move down / next".to_string(),
-        "  Ctrl+P       move up / previous".to_string(),
-        "".to_string(),
+        t!("help.global").to_string(),
+        help_line("?", t!("help.desc.toggle_help").as_ref()),
+        help_line("Tab", t!("help.desc.cycle_focus_forward").as_ref()),
+        help_line("Shift+Tab", t!("help.desc.cycle_focus_backward").as_ref()),
+        help_line("m", t!("help.desc.maximize").as_ref()),
+        help_line("Ctrl+E", t!("help.desc.export").as_ref()),
+        help_line("Ctrl+G", t!("help.desc.switch_env").as_ref()),
+        help_line("Ctrl+O", t!("help.desc.open_file").as_ref()),
+        help_line("F2", t!("help.desc.switch_tab").as_ref()),
+        help_line("Ctrl+Left", t!("help.desc.prev_tab").as_ref()),
+        help_line("Ctrl+Right", t!("help.desc.next_tab").as_ref()),
+        help_line("F3", t!("help.desc.new_tab").as_ref()),
+        help_line("F4", t!("help.desc.edit_source").as_ref()),
+        help_line("Ctrl+T", t!("help.desc.cycle_theme").as_ref()),
+        help_line("Ctrl+C", t!("help.desc.quit").as_ref()),
+        help_line("Ctrl+N", t!("help.desc.move_down").as_ref()),
+        help_line("Ctrl+P", t!("help.desc.move_up").as_ref()),
+        String::new(),
     ];
 
     match app.app_mode {
         AppMode::Runbook => match app.focus {
             Focus::Commands => {
-                lines.push("Runbook - Commands:".to_string());
-                lines.push("  ↑/↓ or Ctrl+P/Ctrl+N  select command".to_string());
-                lines.push("  Enter                 run selected command".to_string());
-                lines.push("  /                     search commands".to_string());
-                lines.push("  Esc                   clear search".to_string());
-                lines.push("  letter key            run command by keybinding".to_string());
+                lines.push(t!("help.section.runbook_commands").to_string());
+                lines.push(help_line("↑/↓ or Ctrl+P/Ctrl+N", t!("help.desc.select_command").as_ref()));
+                lines.push(help_line("Enter", t!("help.desc.run_command").as_ref()));
+                lines.push(help_line("/", t!("help.desc.search_commands").as_ref()));
+                lines.push(help_line("Esc", t!("help.desc.clear_search").as_ref()));
+                lines.push(help_line("letter key", t!("help.desc.run_by_key").as_ref()));
             }
             Focus::Processes => {
-                lines.push("Runbook - Processes:".to_string());
-                lines.push("  ↑/↓ or Ctrl+P/Ctrl+N  select process".to_string());
-                lines.push("  PgUp/PgDn/Home/End    scroll output".to_string());
-                lines.push("  Esc/q                 back to commands".to_string());
+                lines.push(t!("help.section.runbook_processes").to_string());
+                lines.push(help_line("↑/↓ or Ctrl+P/Ctrl+N", t!("help.desc.select_process").as_ref()));
+                lines.push(help_line("PgUp/PgDn/Home/End", t!("help.desc.scroll_output").as_ref()));
+                lines.push(help_line("Esc/q", t!("help.desc.back_to_commands").as_ref()));
             }
             Focus::Output => {
-                lines.push("Runbook - Output:".to_string());
-                lines.push("  ↑/↓ or Ctrl+P/Ctrl+N  scroll output".to_string());
-                lines.push("  PgUp/PgDn/Home/End    scroll output".to_string());
-                lines.push("  Esc/q                 back to processes".to_string());
+                lines.push(t!("help.section.runbook_output").to_string());
+                lines.push(help_line("↑/↓ or Ctrl+P/Ctrl+N", t!("help.desc.scroll_output").as_ref()));
+                lines.push(help_line("PgUp/PgDn/Home/End", t!("help.desc.scroll_output").as_ref()));
+                lines.push(help_line("Esc/q", t!("help.desc.back_to_processes").as_ref()));
             }
             _ => {}
         },
         AppMode::Api => match app.focus {
             Focus::Commands => {
-                lines.push("API - APIs:".to_string());
-                lines.push("  ↑/↓ or Ctrl+P/Ctrl+N  select API".to_string());
-                lines.push("  Enter                 send selected request".to_string());
-                lines.push("  /                     search APIs".to_string());
-                lines.push("  Esc                   clear search".to_string());
-                lines.push("  letter key            send API by keybinding".to_string());
+                lines.push(t!("help.section.api_apis").to_string());
+                lines.push(help_line("↑/↓ or Ctrl+P/Ctrl+N", t!("help.desc.select_api").as_ref()));
+                lines.push(help_line("Enter", t!("help.desc.send_request").as_ref()));
+                lines.push(help_line("/", t!("help.desc.search_apis").as_ref()));
+                lines.push(help_line("Esc", t!("help.desc.clear_search").as_ref()));
+                lines.push(help_line("letter key", t!("help.desc.send_by_key").as_ref()));
             }
             Focus::Variables => {
-                lines.push("API - Variables:".to_string());
-                lines.push("  ↑/↓ or Ctrl+P/Ctrl+N  select variable".to_string());
-                lines.push("  Enter                 edit selected value".to_string());
-                lines.push("  Esc                   cancel edit".to_string());
+                lines.push(t!("help.section.api_variables").to_string());
+                lines.push(help_line("↑/↓ or Ctrl+P/Ctrl+N", t!("help.desc.select_variable").as_ref()));
+                lines.push(help_line("Enter", t!("help.desc.edit_value").as_ref()));
+                lines.push(help_line("Esc", t!("help.desc.cancel_edit").as_ref()));
             }
             Focus::Processes => {
-                lines.push("API - Requests:".to_string());
-                lines.push("  ↑/↓ or Ctrl+P/Ctrl+N  select request".to_string());
-                lines.push("  PgUp/PgDn/Home/End    scroll response body".to_string());
-                lines.push("  Esc/q                 back to APIs".to_string());
+                lines.push(t!("help.section.api_requests").to_string());
+                lines.push(help_line("↑/↓ or Ctrl+P/Ctrl+N", t!("help.desc.select_request").as_ref()));
+                lines.push(help_line("PgUp/PgDn/Home/End", t!("help.desc.scroll_response_body").as_ref()));
+                lines.push(help_line("Esc/q", t!("help.desc.back_to_apis").as_ref()));
             }
             Focus::RequestBody => {
-                lines.push("API - Request Body:".to_string());
-                lines.push("  ↑/↓ or Ctrl+P/Ctrl+N  scroll request body".to_string());
-                lines.push("  PgUp/PgDn/Home/End    scroll request body".to_string());
-                lines.push("  Esc/q                 back to requests".to_string());
+                lines.push(t!("help.section.api_request_body").to_string());
+                lines.push(help_line("↑/↓ or Ctrl+P/Ctrl+N", t!("help.desc.scroll_request_body").as_ref()));
+                lines.push(help_line("PgUp/PgDn/Home/End", t!("help.desc.scroll_request_body").as_ref()));
+                lines.push(help_line("Esc/q", t!("help.desc.back_to_requests").as_ref()));
             }
             Focus::ResponseBody => {
-                lines.push("API - Response Body:".to_string());
-                lines.push("  ↑/↓ or Ctrl+P/Ctrl+N  scroll response body".to_string());
-                lines.push("  PgUp/PgDn/Home/End    scroll response body".to_string());
-                lines.push("  Esc/q                 back to requests".to_string());
+                lines.push(t!("help.section.api_response_body").to_string());
+                lines.push(help_line("↑/↓ or Ctrl+P/Ctrl+N", t!("help.desc.scroll_response_body").as_ref()));
+                lines.push(help_line("PgUp/PgDn/Home/End", t!("help.desc.scroll_response_body").as_ref()));
+                lines.push(help_line("Esc/q", t!("help.desc.back_to_requests").as_ref()));
             }
             _ => {}
         },
@@ -805,7 +809,7 @@ fn render_help(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, popup);
     let items: Vec<ListItem> = lines.into_iter().map(ListItem::new).collect();
     let list = List::new(items)
-        .block(Block::default().title("Help").borders(Borders::ALL));
+        .block(Block::default().title(t!("ui.help_title").to_string()).borders(Borders::ALL));
     frame.render_widget(list, popup);
 }
 
@@ -815,9 +819,9 @@ fn render_log(app: &mut App, frame: &mut Frame, area: Rect) {
     let (title, lines) = if let Some(p) = app.selected_process() {
         let width = area.width.saturating_sub(2);
         let display = wrap_lines(&p.output, width);
-        (format!("Output: {}", p.title), display)
+        (t!("ui.output_title", title = p.title.clone()).to_string(), display)
     } else {
-        ("Output".to_string(), vec!["No process selected".to_string()])
+        (t!("ui.output_empty_title").to_string(), vec![t!("ui.no_process_selected").to_string()])
     };
 
     if lines.is_empty() {

@@ -15,11 +15,15 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
+use rust_i18n::t;
+
 use crate::api::parse_collection;
 use crate::app::{read_input, App, AppEvent, handle_event};
 use crate::config::{load_global_editor, read_config, resolve_editor};
 use crate::env::parse_variable_groups;
 use crate::ui::{install_panic_hook, TerminalGuard, ui};
+
+rust_i18n::i18n!("locales", fallback = "en");
 
 pub async fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -30,27 +34,27 @@ pub async fn run() -> Result<()> {
     while i < args.len() {
         match args[i].as_str() {
             "--version" | "-V" => {
-                println!("rbt {}", env!("CARGO_PKG_VERSION"));
+                println!("{}", t!("app.version", version = env!("CARGO_PKG_VERSION")));
                 return Ok(());
             }
             "--api" => {
                 i += 1;
                 if i >= args.len() {
-                    anyhow::bail!("--api requires a collection JSON or YAML file path");
+                    anyhow::bail!("{}", t!("lib.api_arg_required"));
                 }
                 path_args.push((PathBuf::from(&args[i]), true));
             }
             "--env" => {
                 i += 1;
                 if i >= args.len() {
-                    anyhow::bail!("--env requires a variable group JSON file path");
+                    anyhow::bail!("{}", t!("lib.env_arg_required"));
                 }
                 env_path = Some(PathBuf::from(&args[i]));
             }
             "--environment" => {
                 i += 1;
                 if i >= args.len() {
-                    anyhow::bail!("--environment requires an environment name");
+                    anyhow::bail!("{}", t!("lib.environment_arg_required"));
                 }
                 env_name = Some(args[i].clone());
             }
@@ -68,14 +72,14 @@ pub async fn run() -> Result<()> {
     for (path, _) in &path_args {
         if !path.exists() {
             anyhow::bail!(
-                "Config not found: {}\nCreate a TOML file with [[commands]] entries or pass a Postman collection JSON file.",
-                path.display()
+                "{}",
+                t!("lib.config_not_found", path = path.display().to_string())
             );
         }
     }
 
     if let Some(ref p) = env_path && !p.exists() {
-        anyhow::bail!("Variable group file not found: {}", p.display());
+        anyhow::bail!("{}", t!("lib.variable_group_not_found", path = p.display().to_string()));
     }
 
     install_panic_hook();
@@ -163,7 +167,7 @@ pub async fn run() -> Result<()> {
                         current_tab = tabs.len() - 1;
                     }
                     Err(e) => {
-                        tabs[current_tab].set_message(format!("Failed to load tab: {}", e));
+                        tabs[current_tab].set_message(t!("lib.load_tab_error", error = e).to_string());
                     }
                 }
             }
@@ -242,7 +246,7 @@ fn handle_input(
             let result = guard.run_editor(&path, &editor);
             input_paused.store(false, Ordering::Relaxed);
             if let Err(e) = result {
-                tabs[*current_tab].set_message(format!("Editor failed: {}", e));
+                tabs[*current_tab].set_message(t!("lib.editor_failed", error = e).to_string());
             }
             return Ok(true);
         }

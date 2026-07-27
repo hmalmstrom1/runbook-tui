@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::Path;
+use std::process::Command as StdCommand;
 
 use anyhow::{Context, Result};
+use rust_i18n::t;
 use serde::Deserialize;
 
 use crate::keybinding::KeyBinding;
@@ -35,13 +37,13 @@ pub(crate) struct RunbookConfig {
 
 pub(crate) fn read_config(path: &Path) -> Result<RunbookConfig> {
     let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read config {}", path.display()))?;
+        .with_context(|| t!("config.read_error", path = path.display().to_string()).to_string())?;
     let config: ConfigFile = toml::from_str(&content)
-        .with_context(|| "Failed to parse config as TOML")?;
+        .with_context(|| t!("config.parse_toml_error").to_string())?;
     let mut commands = Vec::new();
     for raw in config.commands {
         let key = KeyBinding::parse(&raw.keybinding)
-            .with_context(|| format!("Invalid keybinding '{}' for command '{}'", raw.keybinding, raw.title))?;
+            .with_context(|| t!("config.invalid_keybinding", raw = raw.keybinding, title = raw.title).to_string())?;
         commands.push(Command {
             title: raw.title,
             key,
@@ -67,5 +69,20 @@ pub(crate) fn resolve_editor(file_editor: Option<String>, global_editor: Option<
         .or(global_editor.filter(|s| !s.is_empty()))
         .or_else(|| std::env::var("VISUAL").ok().filter(|s| !s.is_empty()))
         .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.is_empty()))
+        .or_else(|| pick_editor(&["vim", "vi", "emacs"]))
         .unwrap_or_else(|| "vi".to_string())
+}
+
+fn pick_editor(candidates: &[&str]) -> Option<String> {
+    for editor in candidates {
+        if StdCommand::new("sh")
+            .arg("-c")
+            .arg(format!("command -v {}", editor))
+            .status()
+            .is_ok_and(|s| s.success())
+        {
+            return Some((*editor).to_string());
+        }
+    }
+    None
 }

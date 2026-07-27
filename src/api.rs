@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use reqwest::header::{HeaderName, HeaderValue};
+use rust_i18n::t;
 use serde::Deserialize;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -72,9 +73,9 @@ impl ApiStatus {
 
     pub fn label(&self) -> String {
         match self {
-            ApiStatus::Running => "running".to_string(),
-            ApiStatus::Done(s) => format!("status {}", s),
-            ApiStatus::Failed(e) => format!("failed: {}", e),
+            ApiStatus::Running => t!("api.status.running").to_string(),
+            ApiStatus::Done(s) => t!("api.status.status_code", code = s.to_string()).to_string(),
+            ApiStatus::Failed(e) => t!("api.status.failed", error = e).to_string(),
         }
     }
 }
@@ -515,7 +516,7 @@ fn parse_openapi_content(content: &str) -> Result<ParsedCollection> {
     let doc: OpenApiDocument = if let Ok(d) = serde_json::from_str(content) {
         d
     } else {
-        serde_yaml::from_str(content).with_context(|| "Failed to parse OpenAPI document")?
+        serde_yaml::from_str(content).with_context(|| t!("api.openapi_parse_error").to_string())?
     };
 
     let mut variables: BTreeMap<String, String> = BTreeMap::new();
@@ -615,7 +616,7 @@ fn detect_format(content: &str) -> Result<&'static str> {
             return Ok("postman");
         }
     }
-    bail!("Unable to determine collection format; expected OpenAPI 3.x or Postman collection")
+    bail!("{}", t!("api.unknown_collection_format"))
 }
 
 fn assign_keybindings(apis: &mut [ApiItem]) {
@@ -631,7 +632,7 @@ fn parse_postman_content(content: &str) -> Result<ParsedCollection> {
     let collection: PostmanCollection = if let Ok(c) = serde_json::from_str(content) {
         c
     } else {
-        serde_yaml::from_str(content).with_context(|| "Failed to parse Postman collection")?
+        serde_yaml::from_str(content).with_context(|| t!("api.postman_parse_error").to_string())?
     };
 
     let mut secret_keys = BTreeSet::new();
@@ -763,14 +764,14 @@ pub(crate) fn format_body(body: &str, content_type: Option<&str>) -> String {
 
 pub(crate) fn parse_collection(path: &Path) -> Result<ParsedCollection> {
     let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read collection {}", path.display()))?;
+        .with_context(|| t!("api.read_collection_error", path = path.display().to_string()).to_string())?;
     let format = detect_format(&content)?;
     let mut parsed = match format {
         "openapi" => parse_openapi_content(&content),
         "postman" => parse_postman_content(&content),
-        _ => bail!("Unknown collection format"),
+        _ => bail!("{}", t!("api.unknown_collection_format")),
     }
-    .with_context(|| format!("Failed to parse collection {}", path.display()))?;
+    .with_context(|| t!("api.parse_collection_error", path = path.display().to_string()).to_string())?;
     assign_keybindings(&mut parsed.apis);
     Ok(parsed)
 }
@@ -811,7 +812,7 @@ async fn run_api_request_inner(
     let response = builder.send().await?;
     let status = response.status().as_u16();
 
-    let mut headers_text = format!("HTTP {}\n", status);
+    let mut headers_text = t!("api.http_status_line", status = status.to_string()).to_string();
     for (name, value) in response.headers() {
         if let Ok(v) = value.to_str() {
             headers_text.push_str(&format!("{}: {}\n", name, v));
