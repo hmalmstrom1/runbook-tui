@@ -235,6 +235,32 @@ Included themes:
 - Base16 One Dark
 - Base16 One Light
 
+### Language / Locale
+
+`rbt` is internationalized using [rust-i18n](https://github.com/longbridge/rust-i18n). The following locales are built in:
+
+- `en` (default fallback)
+- `fr`
+- `de`
+- `es`
+- `it`
+- `ko`
+
+Set the `RUST_I18N_LOCALE` environment variable when launching `rbt` to use a different language:
+
+```bash
+RUST_I18N_LOCALE=fr ./target/release/rbt
+```
+
+You can also export the variable for your shell session:
+
+```bash
+export RUST_I18N_LOCALE=ko
+./target/release/rbt
+```
+
+If the requested locale is not available, the UI falls back to English. To change the locale programmatically, call `rust_i18n::set_locale("fr")` before the UI loop starts.
+
 ### Exporting output
 
 Press `Ctrl+E` to export the output of the currently selected process or API request to a text file in the current directory.
