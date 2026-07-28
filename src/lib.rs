@@ -26,10 +26,10 @@ use crate::ui::{install_panic_hook, TerminalGuard, ui};
 rust_i18n::i18n!("locales", fallback = "en");
 
 pub async fn run() -> Result<()> {
-    if let Ok(locale) = std::env::var("RUST_I18N_LOCALE") {
-        if !locale.is_empty() {
-            rust_i18n::set_locale(&locale);
-        }
+    if let Ok(locale) = std::env::var("RUST_I18N_LOCALE")
+        && !locale.is_empty()
+    {
+        rust_i18n::set_locale(&locale);
     }
 
     let args: Vec<String> = std::env::args().collect();

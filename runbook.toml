@@ -22,3 +22,8 @@ command = "for i in 1 2 3 4 5; do date; sleep 1; done"
 title = "Long output"
 keybinding = "o"
 command = "seq 1 100"
+
+[[commands]]
+title = "Pacman update"
+keybinding = "u"
+command = "sudo pacman -Syu"

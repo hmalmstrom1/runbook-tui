@@ -245,6 +245,7 @@ Included themes:
 - `es`
 - `it`
 - `ko`
+- `zh` (Simplified Chinese)
 
 Set the `RUST_I18N_LOCALE` environment variable when launching `rbt` to use a different language:
 
