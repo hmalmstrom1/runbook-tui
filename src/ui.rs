@@ -246,6 +246,10 @@ pub(crate) fn ui(app: &mut App, frame: &mut Frame) {
         render_help(app, frame, body_area);
     }
 
+    if app.show_cwl_graph {
+        render_cwl_graph(app, frame, body_area);
+    }
+
     if app.input_mode == InputMode::EnvironmentSelect {
         render_environment_select(app, frame, body_area);
     }
@@ -852,6 +856,9 @@ fn help_lines(app: &App) -> Vec<String> {
                 lines.push(help_line("/", t!("help.desc.search_commands").as_ref()));
                 lines.push(help_line("Esc", t!("help.desc.clear_search").as_ref()));
                 lines.push(help_line("letter key", t!("help.desc.run_by_key").as_ref()));
+                if app.app_mode == AppMode::Cwl {
+                    lines.push(help_line("g", "show CWL execution graph"));
+                }
             }
             Focus::Processes => {
                 lines.push(t!("help.section.runbook_processes").to_string());
@@ -922,6 +929,38 @@ fn render_help(app: &App, frame: &mut Frame, area: Rect) {
     let list = List::new(items)
         .block(with_cjk_border(Block::default()).title(t!("ui.help_title").to_string()).borders(Borders::ALL));
     frame.render_widget(list, popup);
+}
+
+fn render_cwl_graph(app: &mut App, frame: &mut Frame, area: Rect) {
+    let height = area.height * 3 / 4;
+    let width = (area.width * 3 / 4).min(area.width.saturating_sub(4)).max(20);
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+
+    let text = app
+        .cwl_doc
+        .as_ref()
+        .map(cwl::format_graph)
+        .unwrap_or_else(|| "No CWL document".to_string());
+
+    frame.render_widget(Clear, popup);
+    let paragraph = Paragraph::new(text)
+        .block(
+            with_cjk_border(
+                Block::default()
+                    .title("CWL Execution Graph")
+                    .borders(Borders::ALL),
+            )
+            .border_style(app.theme.border),
+        )
+        .style(app.theme.border)
+        .wrap(ratatui::widgets::Wrap { trim: true })
+        .scroll((app.cwl_graph_scroll, 0));
+    frame.render_widget(paragraph, popup);
 }
 
 fn render_cwl_info(app: &App, frame: &mut Frame, area: Rect) {
