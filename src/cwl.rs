@@ -164,4 +164,47 @@ fn emit_lines(tab: usize, id: usize, text: &str, tx: &UnboundedSender<AppEvent>)
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn detect_cwl_from_yaml() {
+        let mut file = tempfile::NamedTempFile::with_suffix(".cwl").unwrap();
+        write!(
+            file,
+            "{}\n",
+            r#"
+cwlVersion: v1.2
+class: CommandLineTool
+baseCommand: echo
+inputs: []
+outputs: []
+"#
+            .trim()
+        )
+        .unwrap();
+        assert!(detect_cwl(file.path()));
+    }
+
+    #[test]
+    fn detect_cwl_false_for_api() {
+        let mut file = tempfile::NamedTempFile::with_suffix(".yaml").unwrap();
+        write!(
+            file,
+            "{}\n",
+            r#"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test
+"#
+            .trim()
+        )
+        .unwrap();
+        assert!(!detect_cwl(file.path()));
+    }
+}
+
 
