@@ -1,6 +1,7 @@
 pub mod api;
 pub mod app;
 pub mod config;
+pub mod cwl;
 pub mod env;
 pub mod keybinding;
 pub mod process;
@@ -197,9 +198,12 @@ fn load_app(
     global_editor: Option<String>,
 ) -> Result<App> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let is_cwl = !force_api && (ext == "cwl" || cwl::detect_cwl(path));
     let is_api_file = force_api || ext == "json" || ext == "yaml" || ext == "yml";
 
-    let mut app = if is_api_file {
+    let mut app = if is_cwl {
+        App::new_cwl(path, client)?
+    } else if is_api_file {
         let parsed = parse_collection(path)?;
         let env_groups = env_path.map(parse_variable_groups).transpose()?.unwrap_or_default();
         let mut secret_keys = parsed.secret_keys;

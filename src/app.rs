@@ -13,6 +13,8 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::api::{self, ApiItem, ApiRequest, ApiStatus, format_body, run_api_request};
 use crate::config::{load_global_editor, read_config, resolve_editor, Command};
+use crate::cwl;
+use crate::keybinding::KeyBinding;
 use crate::process::run_process;
 use crate::theme::Theme;
 use crate::ui::colorize_body;
@@ -97,6 +99,7 @@ pub(crate) enum Focus {
 pub(crate) enum AppMode {
     Runbook,
     Api,
+    Cwl,
 }
 
 #[derive(Debug, Clone)]
@@ -164,6 +167,7 @@ pub(crate) struct App {
     pub(crate) tab_select_state: ListState,
     pub(crate) tab_path: PathBuf,
     pub(crate) editor: String,
+    pub(crate) cwl_doc: Option<cwl_core::documents::CWLDocument>,
 }
 
 impl App {
@@ -226,6 +230,7 @@ impl App {
             tab_select_state: ListState::default(),
             tab_path: PathBuf::new(),
             editor: String::new(),
+            cwl_doc: None,
         };
         if let Some(name) = crate::theme::load_saved_theme_name() {
             app.theme = crate::theme::theme_by_name(&name);
@@ -301,6 +306,7 @@ impl App {
             tab_select_state: ListState::default(),
             tab_path: PathBuf::new(),
             editor: String::new(),
+            cwl_doc: None,
         };
         if let Some(name) = crate::theme::load_saved_theme_name() {
             app.theme = crate::theme::theme_by_name(&name);
@@ -310,6 +316,23 @@ impl App {
         app.update_filtered();
         app.variable_state.select(Some(0));
         app
+    }
+
+    pub(crate) fn new_cwl(
+        path: &std::path::Path,
+        client: reqwest::Client,
+    ) -> anyhow::Result<Self> {
+        let doc = cwl::load_cwl(path)?;
+        let title = cwl::cwl_title(&doc);
+        let run_cmd = Command {
+            title: format!("Run CWL: {}", title),
+            key: KeyBinding::parse("r").ok_or_else(|| anyhow::anyhow!("invalid keybinding"))?,
+            command: path.display().to_string(),
+        };
+        let mut app = Self::new(vec![run_cmd], client);
+        app.app_mode = AppMode::Cwl;
+        app.cwl_doc = Some(doc);
+        Ok(app)
     }
 
     fn recompute_variables(&mut self) {
@@ -454,7 +477,7 @@ impl App {
     pub(crate) fn update_filtered(&mut self) {
         let q = self.search.to_lowercase();
         match self.app_mode {
-            AppMode::Runbook => {
+            AppMode::Runbook | AppMode::Cwl => {
                 self.filtered = self
                     .commands
                     .iter()
@@ -613,7 +636,7 @@ impl App {
 
     pub(crate) fn export_output(&mut self) {
         let result = match self.app_mode {
-            AppMode::Runbook => self.export_runbook_output(),
+            AppMode::Runbook | AppMode::Cwl => self.export_runbook_output(),
             AppMode::Api => self.export_api_output(),
         };
         match result {
@@ -1018,6 +1041,12 @@ impl App {
             (AppMode::Runbook, Focus::Commands, false) => Focus::Output,
             (AppMode::Runbook, Focus::Output, false) => Focus::Processes,
             (AppMode::Runbook, Focus::Processes, false) => Focus::Commands,
+            (AppMode::Cwl, Focus::Commands, true) => Focus::Processes,
+            (AppMode::Cwl, Focus::Processes, true) => Focus::Output,
+            (AppMode::Cwl, Focus::Output, true) => Focus::Commands,
+            (AppMode::Cwl, Focus::Commands, false) => Focus::Output,
+            (AppMode::Cwl, Focus::Output, false) => Focus::Processes,
+            (AppMode::Cwl, Focus::Processes, false) => Focus::Commands,
             (AppMode::Api, Focus::Commands, true) => Focus::Variables,
             (AppMode::Api, Focus::Variables, true) => Focus::Processes,
             (AppMode::Api, Focus::Processes, true) => Focus::RequestBody,
@@ -1032,7 +1061,7 @@ impl App {
         };
         if self.focus == Focus::Processes {
             match self.app_mode {
-                AppMode::Runbook => {
+                AppMode::Runbook | AppMode::Cwl => {
                     if !self.processes.is_empty() && self.process_state.selected().is_none() {
                         self.process_state.select(Some(self.processes.len() - 1));
                         self.log_follow = true;
@@ -1072,7 +1101,11 @@ impl App {
         self.log_state = ListState::default();
         self.log_follow = true;
 
-        tokio::spawn(run_process(self.tab_idx, id, shell, log_path, tx));
+        if self.app_mode == AppMode::Cwl {
+            tokio::spawn(cwl::run_cwl(self.tab_idx, id, self.tab_path.clone(), tx));
+        } else {
+            tokio::spawn(run_process(self.tab_idx, id, shell, log_path, tx));
+        }
     }
 
     pub(crate) fn spawn_api(&mut self, api_idx: usize, tx: UnboundedSender<AppEvent>) {
@@ -1136,7 +1169,7 @@ impl App {
 
     pub(crate) fn run_selected(&mut self, tx: UnboundedSender<AppEvent>) {
         match self.app_mode {
-            AppMode::Runbook => {
+            AppMode::Runbook | AppMode::Cwl => {
                 if let Some(&idx) = self.filtered.get(self.selected_command) {
                     self.spawn(idx, tx);
                 }
@@ -1151,7 +1184,7 @@ impl App {
 
     pub(crate) fn try_keybinding(&mut self, key: &KeyEvent, tx: UnboundedSender<AppEvent>) {
         match self.app_mode {
-            AppMode::Runbook => {
+            AppMode::Runbook | AppMode::Cwl => {
                 for (i, cmd) in self.commands.iter().enumerate() {
                     if cmd.key.matches(key) {
                         self.spawn(i, tx);
@@ -1396,6 +1429,8 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
     match (app.app_mode, app.focus) {
         (AppMode::Runbook, Focus::Commands) => handle_commands_key(app, key, tx),
         (AppMode::Runbook, Focus::Processes) => handle_processes_key(app, key),
+        (AppMode::Cwl, Focus::Commands) => handle_commands_key(app, key, tx),
+        (AppMode::Cwl, Focus::Processes) => handle_processes_key(app, key),
         (AppMode::Api, Focus::Commands) => handle_apis_key(app, key, tx),
         (AppMode::Api, Focus::Variables) => handle_variables_key(app, key),
         (AppMode::Api, Focus::Processes) => handle_requests_key(app, key),
@@ -1425,6 +1460,8 @@ pub(crate) fn handle_ctrl_n(app: &mut App) {
     match (app.app_mode, app.focus) {
         (AppMode::Runbook, Focus::Commands) => app.select_next_command(),
         (AppMode::Runbook, Focus::Processes) => app.select_next_process(),
+        (AppMode::Cwl, Focus::Commands) => app.select_next_command(),
+        (AppMode::Cwl, Focus::Processes) => app.select_next_process(),
         (AppMode::Api, Focus::Commands) => app.select_next_api(),
         (AppMode::Api, Focus::Variables) => app.select_next_variable(),
         (AppMode::Api, Focus::Processes) => app.select_next_request(),
@@ -1438,6 +1475,8 @@ pub(crate) fn handle_ctrl_p(app: &mut App) {
     match (app.app_mode, app.focus) {
         (AppMode::Runbook, Focus::Commands) => app.select_prev_command(),
         (AppMode::Runbook, Focus::Processes) => app.select_prev_process(),
+        (AppMode::Cwl, Focus::Commands) => app.select_prev_command(),
+        (AppMode::Cwl, Focus::Processes) => app.select_prev_process(),
         (AppMode::Api, Focus::Commands) => app.select_prev_api(),
         (AppMode::Api, Focus::Variables) => app.select_prev_variable(),
         (AppMode::Api, Focus::Processes) => app.select_prev_request(),

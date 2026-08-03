@@ -18,6 +18,7 @@ use rust_i18n::t;
 use unicode_width::UnicodeWidthChar;
 
 use crate::app::{App, AppMode, Focus, InputMode};
+use crate::cwl;
 use crate::theme::Theme;
 
 /// Wrapper around [`CrosstermBackend`] that works around a cursor-positioning bug
@@ -220,6 +221,11 @@ pub(crate) fn ui(app: &mut App, frame: &mut Frame) {
                 render_processes(app, frame, history_area);
                 render_log(app, frame, output_area);
             }
+            AppMode::Cwl => {
+                render_commands(app, frame, list_area);
+                render_cwl_info(app, frame, history_area);
+                render_log(app, frame, output_area);
+            }
             AppMode::Api => {
                 let vars_height = (app.variables.len() as u16 + 2).clamp(4, 8);
                 let api_layout = Layout::vertical([Constraint::Fill(1), Constraint::Length(vars_height)]).spacing(1);
@@ -324,6 +330,11 @@ fn render_search(app: &App, frame: &mut Frame, area: Rect) {
     let hint = match app.app_mode {
         AppMode::Runbook => t!("ui.search_hint.runbook").to_string(),
         AppMode::Api => t!("ui.search_hint.api").to_string(),
+        AppMode::Cwl => app
+            .cwl_doc
+            .as_ref()
+            .map(cwl::cwl_summary)
+            .unwrap_or_else(|| "CWL".to_string()),
     };
     let text = if app.search.is_empty() { hint.as_str() } else { app.search.as_str() };
     let style = if search_focused { app.theme.input } else { app.theme.border };
@@ -833,7 +844,7 @@ fn help_lines(app: &App) -> Vec<String> {
     ];
 
     match app.app_mode {
-        AppMode::Runbook => match app.focus {
+        AppMode::Runbook | AppMode::Cwl => match app.focus {
             Focus::Commands => {
                 lines.push(t!("help.section.runbook_commands").to_string());
                 lines.push(help_line("↑/↓ or Ctrl+P/Ctrl+N", t!("help.desc.select_command").as_ref()));
@@ -911,6 +922,31 @@ fn render_help(app: &App, frame: &mut Frame, area: Rect) {
     let list = List::new(items)
         .block(with_cjk_border(Block::default()).title(t!("ui.help_title").to_string()).borders(Borders::ALL));
     frame.render_widget(list, popup);
+}
+
+fn render_cwl_info(app: &App, frame: &mut Frame, area: Rect) {
+    let summary = app
+        .cwl_doc
+        .as_ref()
+        .map(cwl::cwl_summary)
+        .unwrap_or_else(|| "CWL".to_string());
+
+    let mut text = summary;
+    if let Some(doc) = &app.cwl_doc {
+        text.push('\n');
+        for (id, _) in cwl::cwl_inputs(doc) {
+            text.push('\n');
+            text.push_str(&format!("- {id}"));
+        }
+    }
+
+    let paragraph = Paragraph::new(text)
+        .block(
+            with_cjk_border(Block::default().title("CWL").borders(Borders::ALL))
+                .border_style(app.theme.border),
+        )
+        .style(app.theme.border);
+    frame.render_widget(paragraph, area);
 }
 
 fn render_log(app: &mut App, frame: &mut Frame, area: Rect) {
