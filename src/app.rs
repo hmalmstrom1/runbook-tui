@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -171,6 +171,13 @@ pub(crate) struct App {
     pub(crate) show_cwl_graph: bool,
     pub(crate) cwl_graph_scroll: u16,
     pub(crate) cwl_graph_hscroll: u16,
+    pub(crate) cwl_outputs: Option<HashMap<String, String>>,
+    pub(crate) cwl_exit_code: Option<i32>,
+    pub(crate) cwl_error: Option<String>,
+    pub(crate) cwl_process_id: Option<usize>,
+    pub(crate) show_cwl_results: bool,
+    pub(crate) cwl_results_scroll: u16,
+    pub(crate) cwl_results_hscroll: u16,
 }
 
 impl App {
@@ -237,6 +244,13 @@ impl App {
             show_cwl_graph: false,
             cwl_graph_scroll: 0,
             cwl_graph_hscroll: 0,
+            cwl_outputs: None,
+            cwl_exit_code: None,
+            cwl_error: None,
+            cwl_process_id: None,
+            show_cwl_results: false,
+            cwl_results_scroll: 0,
+            cwl_results_hscroll: 0,
         };
         if let Some(name) = crate::theme::load_saved_theme_name() {
             app.theme = crate::theme::theme_by_name(&name);
@@ -316,6 +330,13 @@ impl App {
             show_cwl_graph: false,
             cwl_graph_scroll: 0,
             cwl_graph_hscroll: 0,
+            cwl_outputs: None,
+            cwl_exit_code: None,
+            cwl_error: None,
+            cwl_process_id: None,
+            show_cwl_results: false,
+            cwl_results_scroll: 0,
+            cwl_results_hscroll: 0,
         };
         if let Some(name) = crate::theme::load_saved_theme_name() {
             app.theme = crate::theme::theme_by_name(&name);
@@ -613,8 +634,16 @@ impl App {
 
     pub(crate) fn toggle_cwl_graph(&mut self) {
         self.show_cwl_graph = !self.show_cwl_graph;
+        self.show_cwl_results = false;
         self.cwl_graph_scroll = 0;
         self.cwl_graph_hscroll = 0;
+    }
+
+    pub(crate) fn toggle_cwl_results(&mut self) {
+        self.show_cwl_results = !self.show_cwl_results;
+        self.show_cwl_graph = false;
+        self.cwl_results_scroll = 0;
+        self.cwl_results_hscroll = 0;
     }
 
     pub(crate) fn cycle_theme(&mut self) {
@@ -1117,6 +1146,10 @@ impl App {
         self.log_follow = true;
 
         if self.app_mode == AppMode::Cwl {
+            self.cwl_process_id = Some(id);
+            self.cwl_outputs = None;
+            self.cwl_exit_code = None;
+            self.cwl_error = None;
             tokio::spawn(cwl::run_cwl(self.tab_idx, id, self.tab_path.clone(), tx));
         } else {
             tokio::spawn(run_process(self.tab_idx, id, shell, log_path, tx));
@@ -1241,11 +1274,26 @@ impl App {
         if let Some(p) = self.processes.iter_mut().find(|p| p.id == id) {
             p.status = ProcessStatus::Exited(code);
         }
+        if self.cwl_process_id == Some(id) {
+            self.cwl_exit_code = Some(code);
+            if code == 0 {
+                self.cwl_error = None;
+            }
+        }
     }
 
     pub(crate) fn set_process_error(&mut self, id: usize, error: String) {
         if let Some(p) = self.processes.iter_mut().find(|p| p.id == id) {
-            p.status = ProcessStatus::Failed(error);
+            p.status = ProcessStatus::Failed(error.clone());
+        }
+        if self.cwl_process_id == Some(id) {
+            self.cwl_error = Some(error);
+        }
+    }
+
+    pub(crate) fn set_cwl_outputs(&mut self, id: usize, outputs: HashMap<String, String>) {
+        if self.cwl_process_id == Some(id) {
+            self.cwl_outputs = Some(outputs);
         }
     }
 
@@ -1269,6 +1317,7 @@ pub(crate) enum AppEvent {
     ProcessLine { tab: usize, id: usize, line: String },
     ProcessExit { tab: usize, id: usize, code: Option<i32> },
     ProcessError { tab: usize, id: usize, error: String },
+    CwlOutputs { tab: usize, id: usize, outputs: HashMap<String, String> },
     ApiResponse { tab: usize, id: usize, status: u16, headers: String, body: String },
     ApiError { tab: usize, id: usize, error: String },
     SwitchTab { tab: usize },
@@ -1308,6 +1357,7 @@ pub(crate) fn handle_event(app: &mut App, event: AppEvent, tx: UnboundedSender<A
         AppEvent::ProcessLine { id, line, .. } => app.push_process_line(id, line),
         AppEvent::ProcessExit { id, code, .. } => app.set_process_exit(id, code),
         AppEvent::ProcessError { id, error, .. } => app.set_process_error(id, error),
+        AppEvent::CwlOutputs { id, outputs, .. } => app.set_cwl_outputs(id, outputs),
         AppEvent::ApiResponse { id, status, headers, body, .. } => {
             app.push_api_response(id, status, headers, body);
         }
@@ -1330,6 +1380,24 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
             || key.code == KeyCode::Char('q')
         {
             app.show_help = false;
+        }
+        return;
+    }
+    if app.show_cwl_results {
+        if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
+            app.show_cwl_results = false;
+        } else if key.code == KeyCode::Up {
+            app.cwl_results_scroll = app.cwl_results_scroll.saturating_sub(1);
+        } else if key.code == KeyCode::Down {
+            app.cwl_results_scroll = app.cwl_results_scroll.saturating_add(1);
+        } else if key.code == KeyCode::PageUp {
+            app.cwl_results_scroll = app.cwl_results_scroll.saturating_sub(5);
+        } else if key.code == KeyCode::PageDown {
+            app.cwl_results_scroll = app.cwl_results_scroll.saturating_add(5);
+        } else if key.code == KeyCode::Left {
+            app.cwl_results_hscroll = app.cwl_results_hscroll.saturating_sub(1);
+        } else if key.code == KeyCode::Right {
+            app.cwl_results_hscroll = app.cwl_results_hscroll.saturating_add(1);
         }
         return;
     }
@@ -1424,6 +1492,15 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
     {
         if app.app_mode == AppMode::Cwl {
             app.toggle_cwl_graph();
+        }
+        return;
+    }
+    if key.code == KeyCode::Char('R')
+        && app.input_mode == InputMode::Normal
+        && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        if app.app_mode == AppMode::Cwl {
+            app.toggle_cwl_results();
         }
         return;
     }

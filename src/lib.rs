@@ -148,6 +148,7 @@ pub async fn run() -> Result<()> {
             AppEvent::ProcessLine { tab, .. }
             | AppEvent::ProcessExit { tab, .. }
             | AppEvent::ProcessError { tab, .. }
+            | AppEvent::CwlOutputs { tab, .. }
             | AppEvent::ApiResponse { tab, .. }
             | AppEvent::ApiError { tab, .. } => {
                 if let Some(t) = tabs.get_mut(tab) {

@@ -250,6 +250,10 @@ pub(crate) fn ui(app: &mut App, frame: &mut Frame) {
         render_cwl_graph(app, frame, body_area);
     }
 
+    if app.show_cwl_results {
+        render_cwl_results(app, frame, body_area);
+    }
+
     if app.input_mode == InputMode::EnvironmentSelect {
         render_environment_select(app, frame, body_area);
     }
@@ -858,6 +862,7 @@ fn help_lines(app: &App) -> Vec<String> {
                 lines.push(help_line("letter key", t!("help.desc.run_by_key").as_ref()));
                 if app.app_mode == AppMode::Cwl {
                     lines.push(help_line("g", "show CWL execution graph"));
+                    lines.push(help_line("R", "show CWL execution results"));
                 }
             }
             Focus::Processes => {
@@ -959,6 +964,33 @@ fn render_cwl_graph(app: &mut App, frame: &mut Frame, area: Rect) {
         )
         .style(app.theme.border)
         .scroll((app.cwl_graph_scroll, app.cwl_graph_hscroll));
+    frame.render_widget(paragraph, popup);
+}
+
+fn render_cwl_results(app: &mut App, frame: &mut Frame, area: Rect) {
+    let height = area.height * 9 / 10;
+    let width = (area.width * 9 / 10).min(area.width.saturating_sub(4)).max(20);
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+
+    let text = cwl::format_results(app);
+
+    frame.render_widget(Clear, popup);
+    let paragraph = Paragraph::new(text)
+        .block(
+            with_cjk_border(
+                Block::default()
+                    .title("CWL Execution Results")
+                    .borders(Borders::ALL),
+            )
+            .border_style(app.theme.border),
+        )
+        .style(app.theme.border)
+        .scroll((app.cwl_results_scroll, app.cwl_results_hscroll));
     frame.render_widget(paragraph, popup);
 }
 

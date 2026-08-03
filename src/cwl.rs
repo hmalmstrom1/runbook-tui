@@ -16,7 +16,7 @@ use cwl_engine_storage::{StorageBackend, StoragePath};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use crate::app::AppEvent;
+use crate::app::{App, AppEvent};
 
 pub(crate) fn detect_cwl(path: &Path) -> bool {
     let Ok(content) = std::fs::read_to_string(path) else {
@@ -166,22 +166,73 @@ async fn run_cwl_inner(
                 cwl_engine::EngineStatus::Undefined(c) => Some(c),
             };
 
-            if !result.outputs.is_empty() {
+            let outputs: std::collections::HashMap<String, String> = result
+                .outputs
+                .iter()
+                .map(|(k, v)| {
+                    let value = serde_json::to_string_pretty(v)
+                        .unwrap_or_else(|_| format!("{v:?}"));
+                    (k.clone(), value)
+                })
+                .collect();
+
+            let mut output_lines = String::from("CWL outputs:");
+            for (k, v) in &outputs {
+                output_lines.push('\n');
+                output_lines.push_str(k);
+                output_lines.push_str(": ");
+                output_lines.push_str(v);
+            }
+            if !outputs.is_empty() {
                 let _ = tx.send(AppEvent::ProcessLine {
                     tab,
                     id,
-                    line: format!("Outputs: {:?}", result.outputs),
+                    line: output_lines,
                 });
             }
 
-            let _ = tx.send(AppEvent::ProcessExit { tab, id, code });
+            let _ = tx.send(AppEvent::CwlOutputs {
+                tab,
+                id,
+                outputs,
+            });
+
+            if let Some(code) = code {
+                if code == 0 {
+                    let _ = tx.send(AppEvent::ProcessLine {
+                        tab,
+                        id,
+                        line: "CWL execution finished successfully".to_string(),
+                    });
+                } else {
+                    let _ = tx.send(AppEvent::ProcessLine {
+                        tab,
+                        id,
+                        line: format!("CWL execution failed with exit code {code}"),
+                    });
+                    let _ = tx.send(AppEvent::ProcessError {
+                        tab,
+                        id,
+                        error: format!("Exit code {code}"),
+                    });
+                }
+                let _ = tx.send(AppEvent::ProcessExit { tab, id, code: Some(code) });
+            } else {
+                let _ = tx.send(AppEvent::ProcessExit { tab, id, code });
+            }
             Ok(())
         }
         Err(e) => {
+            let error = format!("Execution error: {e:?}");
             let _ = tx.send(AppEvent::ProcessLine {
                 tab,
                 id,
-                line: format!("Execution error: {e:?}"),
+                line: error.clone(),
+            });
+            let _ = tx.send(AppEvent::ProcessError {
+                tab,
+                id,
+                error,
             });
             let _ = tx.send(AppEvent::ProcessExit { tab, id, code: Some(1) });
             Ok(())
@@ -420,6 +471,88 @@ fn format_operation(tool: &Operation, version: &str) -> String {
     s
 }
 
+pub(crate) fn format_results(app: &App) -> String {
+    let mut s = String::from("CWL Execution Results\n\n");
+
+    let status = if let Some(error) = &app.cwl_error {
+        format!("Failed: {error}")
+    } else if let Some(code) = app.cwl_exit_code {
+        if code == 0 {
+            "Success".to_string()
+        } else {
+            format!("Failed (exit code {code})")
+        }
+    } else {
+        "Not run".to_string()
+    };
+    s.push_str(&format!("Status: {status}\n\n"));
+
+    s.push_str("Outputs:\n");
+    if let Some(outputs) = &app.cwl_outputs {
+        if outputs.is_empty() {
+            s.push_str("  (none)\n");
+        } else {
+            for (k, v) in outputs.iter() {
+                s.push_str(&format!("  {k}:\n"));
+                for line in v.lines() {
+                    s.push_str(&format!("    {line}\n"));
+                }
+            }
+        }
+    } else {
+        s.push_str("  (not available)\n");
+    }
+    s.push('\n');
+
+    if let Some(doc) = &app.cwl_doc {
+        match doc {
+            CWLDocument::Workflow(wf) => {
+                s.push_str("Steps:\n");
+                for step in &wf.steps {
+                    let id = step.id.as_deref().unwrap_or("?");
+                    let run = match &step.run {
+                        StringOrDocument::String(path) => path.clone(),
+                        StringOrDocument::Document(doc) => match doc.as_ref() {
+                            CWLDocument::CommandLineTool(_) => "CommandLineTool".to_string(),
+                            CWLDocument::ExpressionTool(_) => "ExpressionTool".to_string(),
+                            CWLDocument::Workflow(_) => "Workflow".to_string(),
+                            CWLDocument::Operation(_) => "Operation".to_string(),
+                        },
+                    };
+                    let mut extra = String::new();
+                    if step.scatter.is_some() {
+                        extra.push_str(" [scatter]");
+                    }
+                    if step.when.is_some() {
+                        extra.push_str(" [conditional]");
+                    }
+                    let step_status = if app.cwl_error.is_some() {
+                        "failed"
+                    } else if app.cwl_exit_code == Some(0) {
+                        "completed"
+                    } else {
+                        "unknown"
+                    };
+                    s.push_str(&format!("  {id} ({run}){extra} - {step_status}\n"));
+                }
+            }
+            CWLDocument::CommandLineTool(_) => {
+                s.push_str("Document type: CommandLineTool\n");
+            }
+            CWLDocument::ExpressionTool(_) => {
+                s.push_str("Document type: ExpressionTool\n");
+            }
+            CWLDocument::Operation(_) => {
+                s.push_str("Document type: Operation\n");
+            }
+        }
+    } else {
+        s.push_str("Steps:\n  (no document loaded)\n");
+    }
+
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,6 +685,27 @@ metadata:
         assert!(graph.contains("greeting"));
         assert!(graph.contains("greetings"));
         assert!(graph.contains("shouted"));
+    }
+
+    #[test]
+    fn format_cwl_results_view() {
+        let mut app = crate::app::App::new(Vec::new(), reqwest::Client::new());
+        let path = std::path::Path::new("example-complex.cwl");
+        app.cwl_doc = load_cwl(path).ok();
+        app.cwl_exit_code = Some(0);
+        let mut outputs = std::collections::HashMap::new();
+        outputs.insert("all_greetings".to_string(), "[\"Hello, Alice!\"]".to_string());
+        outputs.insert("shouted".to_string(), "[\"HELLO, ALICE!\"]".to_string());
+        app.cwl_outputs = Some(outputs);
+
+        let results = format_results(&app);
+        assert!(results.contains("CWL Execution Results"));
+        assert!(results.contains("Status: Success"));
+        assert!(results.contains("all_greetings"));
+        assert!(results.contains("shouted"));
+        assert!(results.contains("greet"));
+        assert!(results.contains("maybe_shout"));
+        assert!(results.contains("completed"));
     }
 }
 
