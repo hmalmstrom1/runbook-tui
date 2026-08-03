@@ -205,6 +205,15 @@ metadata:
         .unwrap();
         assert!(!detect_cwl(file.path()));
     }
+
+    #[test]
+    fn load_complex_workflow_example() {
+        let path = std::path::Path::new("example-complex.cwl");
+        let doc = load_cwl(path);
+        assert!(doc.is_ok(), "{doc:?}");
+        let doc = doc.unwrap();
+        assert!(matches!(doc, CWLDocument::Workflow(_)));
+    }
 }
 
 
