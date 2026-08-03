@@ -932,8 +932,8 @@ fn render_help(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_cwl_graph(app: &mut App, frame: &mut Frame, area: Rect) {
-    let height = area.height * 3 / 4;
-    let width = (area.width * 3 / 4).min(area.width.saturating_sub(4)).max(20);
+    let height = area.height * 9 / 10;
+    let width = (area.width * 9 / 10).min(area.width.saturating_sub(4)).max(20);
     let popup = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
         y: area.y + (area.height.saturating_sub(height)) / 2,
@@ -958,7 +958,6 @@ fn render_cwl_graph(app: &mut App, frame: &mut Frame, area: Rect) {
             .border_style(app.theme.border),
         )
         .style(app.theme.border)
-        .wrap(ratatui::widgets::Wrap { trim: true })
         .scroll((app.cwl_graph_scroll, 0));
     frame.render_widget(paragraph, popup);
 }

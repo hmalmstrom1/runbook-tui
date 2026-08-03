@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
+ascii-dag = "0.9.1"
 crossterm = "0.29.0"
 cwl_core = "0.10.0"
 cwl_engine = "0.8.5"

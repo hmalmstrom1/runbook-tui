@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use ascii_dag::{Graph, RenderMode};
 use cwl_core::documents::{
     CWLDocument, CommandLineTool, ExpressionTool, Operation, StringOrDocument, Workflow,
 };
@@ -208,95 +210,145 @@ pub(crate) fn format_graph(doc: &CWLDocument) -> String {
 }
 
 fn format_workflow(wf: &Workflow, version: &str) -> String {
-    let mut s = String::new();
-    s.push_str(&format!(
+    let mut labels: Vec<String> = Vec::new();
+    let mut node_id_by_name: HashMap<String, usize> = HashMap::new();
+
+    // Workflow inputs
+    for input in &wf.inputs {
+        let id = labels.len() + 1;
+        let name = input.id.clone().unwrap_or_default();
+        let label = if name.is_empty() { "?".to_string() } else { name.clone() };
+        labels.push(label);
+        node_id_by_name.insert(name, id);
+    }
+
+    // Workflow steps
+    for step in &wf.steps {
+        let id = labels.len() + 1;
+        let name = step.id.clone().unwrap_or_default();
+        let run = match &step.run {
+            StringOrDocument::String(path) => path.clone(),
+            StringOrDocument::Document(doc) => match doc.as_ref() {
+                CWLDocument::CommandLineTool(_) => "CommandLineTool".to_string(),
+                CWLDocument::ExpressionTool(_) => "ExpressionTool".to_string(),
+                CWLDocument::Workflow(_) => "Workflow".to_string(),
+                CWLDocument::Operation(_) => "Operation".to_string(),
+            },
+        };
+        let mut extra = String::new();
+        if step.scatter.is_some() {
+            extra.push_str(" [scatter]");
+        }
+        if let Some(w) = &step.when {
+            let mut w = w
+                .replace(['$', '{', '}', ';'], "")
+                .split_whitespace()
+                .filter(|t| *t != "return")
+                .collect::<Vec<_>>()
+                .join(" ");
+            if w.len() > 25 {
+                w = format!("{}...", &w[..25]);
+            }
+            if !w.is_empty() {
+                extra.push_str(&format!(" [when: {w}]"));
+            } else {
+                extra.push_str(" [when]");
+            }
+        }
+        let label = if name.is_empty() {
+            format!("? ({run}){extra}")
+        } else {
+            format!("{name} ({run}){extra}")
+        };
+        labels.push(label);
+        node_id_by_name.insert(name, id);
+    }
+
+    // Workflow outputs
+    for output in &wf.outputs {
+        let id = labels.len() + 1;
+        let name = output.id.clone().unwrap_or_default();
+        let label = if name.is_empty() { "?".to_string() } else { name.clone() };
+        labels.push(label);
+        node_id_by_name.insert(name, id);
+    }
+
+    let mut edge_labels: Vec<String> = Vec::new();
+    let mut edges: Vec<(usize, usize, usize)> = Vec::new();
+
+    for step in &wf.steps {
+        let step_id = match step.id.as_ref().and_then(|s| node_id_by_name.get(s)) {
+            Some(&id) => id,
+            None => continue,
+        };
+        for input in &step.r#in {
+            let input_name = input.id.as_deref().unwrap_or("?");
+            let sources = input
+                .source
+                .as_ref()
+                .map(|s| s.as_many())
+                .unwrap_or_default();
+            for source in &sources {
+                let src_id = if let Some(pos) = source.find('/') {
+                    let src_step = &source[..pos];
+                    node_id_by_name.get(src_step).copied().unwrap_or(0)
+                } else {
+                    node_id_by_name.get(source).copied().unwrap_or(0)
+                };
+                if src_id == 0 {
+                    continue;
+                }
+                edge_labels.push(input_name.to_string());
+                edges.push((src_id, step_id, edge_labels.len() - 1));
+            }
+        }
+    }
+
+    for output in &wf.outputs {
+        let output_id = match output.id.as_ref().and_then(|s| node_id_by_name.get(s)) {
+            Some(&id) => id,
+            None => continue,
+        };
+        let sources = output
+            .output_source
+            .as_ref()
+            .map(|s| s.as_many())
+            .unwrap_or_default();
+        for source in &sources {
+            let src_id = if let Some(pos) = source.find('/') {
+                let src_step = &source[..pos];
+                node_id_by_name.get(src_step).copied().unwrap_or(0)
+            } else {
+                node_id_by_name.get(source).copied().unwrap_or(0)
+            };
+            if src_id == 0 {
+                continue;
+            }
+            let edge_label = if let Some(pos) = source.find('/') {
+                &source[pos + 1..]
+            } else {
+                source.as_str()
+            };
+            edge_labels.push(edge_label.to_string());
+            edges.push((src_id, output_id, edge_labels.len() - 1));
+        }
+    }
+
+    let mut graph = Graph::new();
+    graph.set_render_mode(RenderMode::Vertical);
+    for (i, label) in labels.iter().enumerate() {
+        graph.add_node(i + 1, label.as_str());
+    }
+    for (from, to, label_idx) in &edges {
+        graph.add_edge(*from, *to, Some(edge_labels[*label_idx].as_str()));
+    }
+
+    let title = format!(
         "Workflow: {} ({})\n",
         wf.id.as_deref().unwrap_or("unnamed"),
         version
-    ));
-
-    s.push_str("\nWorkflow inputs:\n");
-    for input in &wf.inputs {
-        s.push_str(&format!(
-            "  {}\n",
-            input.id.as_deref().unwrap_or("?")
-        ));
-    }
-
-    s.push_str("\nSteps:\n");
-    for step in &wf.steps {
-        let step_id = step.id.as_deref().unwrap_or("?");
-        let run = match &step.run {
-            StringOrDocument::String(path) => path.clone(),
-            StringOrDocument::Document(doc) => {
-                format!("{} ({})", cwl_title(doc), cwl_summary(doc))
-            }
-        };
-        s.push_str(&format!("  {step_id} ({run})"));
-        if let Some(scatter) = &step.scatter {
-            let keys = scatter
-                .as_many()
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join(", ");
-            s.push_str(&format!(" [scatter: {keys}]"));
-        }
-        if let Some(when) = &step.when {
-            s.push_str(&format!(" [when: {when}]"));
-        }
-        s.push('\n');
-
-        if !step.r#in.is_empty() {
-            s.push_str("    in:\n");
-            for input in &step.r#in {
-                let id = input.id.as_deref().unwrap_or("?");
-                let sources = input
-                    .source
-                    .as_ref()
-                    .map(|s| {
-                        s.as_many()
-                            .iter()
-                            .map(String::as_str)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .unwrap_or_default();
-                s.push_str(&format!("      {id} ← {sources}\n"));
-            }
-        }
-
-        if !step.out.is_empty() {
-            let outs = step
-                .out
-                .iter()
-                .map(|o| o.id())
-                .collect::<Vec<_>>()
-                .join(", ");
-            s.push_str(&format!("    out: {outs}\n"));
-        }
-    }
-
-    if !wf.outputs.is_empty() {
-        s.push_str("\nWorkflow outputs:\n");
-        for output in &wf.outputs {
-            let id = output.id.as_deref().unwrap_or("?");
-            let source = output
-                .output_source
-                .as_ref()
-                .map(|s| {
-                    s.as_many()
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            s.push_str(&format!("  {id} ← {source}\n"));
-        }
-    }
-
-    s
+    );
+    title + &graph.render()
 }
 
 fn format_command_line_tool(tool: &CommandLineTool, version: &str) -> String {
@@ -497,7 +549,9 @@ metadata:
         assert!(graph.contains("maybe_shout"));
         assert!(graph.contains("scatter"));
         assert!(graph.contains("when"));
-        assert!(graph.contains("greet/greeting"));
+        assert!(graph.contains("greeting"));
+        assert!(graph.contains("greetings"));
+        assert!(graph.contains("shouted"));
     }
 }
 
