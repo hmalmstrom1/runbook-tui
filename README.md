@@ -362,7 +362,7 @@ Press `F4` to edit the current tab's source file in an external editor. The edit
 6. `vi` as a fallback.
 7. `emacs` as a final fallback.
 
-The `editor` value is executed through the shell, so it can include arguments. The file path is appended as the last argument and is safely quoted by `rbt`.
+The `editor` value is parsed like a shell command line using `shlex`, so it can include arguments and quoted paths. The file path is appended as a separate argument. No actual shell is invoked, so variable expansion, globs, and other shell features are not interpreted.
 
 Runbook-local editor in `runbook.toml`:
 

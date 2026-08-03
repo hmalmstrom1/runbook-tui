@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::Path;
-use std::process::Command as StdCommand;
 
 use anyhow::{Context, Result};
 use rust_i18n::t;
@@ -74,14 +73,20 @@ pub(crate) fn resolve_editor(file_editor: Option<String>, global_editor: Option<
 }
 
 fn pick_editor(candidates: &[&str]) -> Option<String> {
+    let paths = std::env::var_os("PATH")?;
     for editor in candidates {
-        if StdCommand::new("sh")
-            .arg("-c")
-            .arg(format!("command -v {}", editor))
-            .status()
-            .is_ok_and(|s| s.success())
-        {
-            return Some((*editor).to_string());
+        for dir in std::env::split_paths(&paths) {
+            let p = dir.join(editor);
+            if fs::metadata(&p).ok().filter(|m| m.is_file()).is_some() {
+                let path = p
+                    .to_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| p.to_string_lossy().into_owned());
+                return shlex::try_quote(&path)
+                    .ok()
+                    .map(|q| q.into_owned())
+                    .or(Some(path));
+            }
         }
     }
     None
