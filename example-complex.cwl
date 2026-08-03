@@ -1,6 +1,10 @@
 cwlVersion: v1.2
 class: Workflow
 
+requirements:
+  - class: InlineJavascriptRequirement
+  - class: ScatterFeatureRequirement
+
 inputs:
   names:
     type: string[]
