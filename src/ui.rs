@@ -153,8 +153,8 @@ impl TerminalGuard {
 }
 
 fn run_editor_command(path: &Path, editor: &str) -> std::io::Result<ExitStatus> {
-    let program = editor
-        .split_whitespace()
+    let mut words = editor.split_whitespace();
+    let program = words
         .next()
         .ok_or_else(|| std::io::Error::other(t!("ui.no_editor_configured").to_string()))?;
     if program.contains(std::path::MAIN_SEPARATOR)
@@ -163,13 +163,8 @@ fn run_editor_command(path: &Path, editor: &str) -> std::io::Result<ExitStatus> 
     {
         return Err(std::io::Error::other(t!("ui.editor_is_directory", path = program.to_string()).to_string()));
     }
-    let cmd = format!("{} {}", editor, sh_quote_path(path));
-    Command::new("sh").arg("-c").arg(cmd).status()
-}
-
-fn sh_quote_path(path: &Path) -> String {
-    let s = path.to_string_lossy();
-    format!("'{}'", s.replace('\'', "'\"'\"'"))
+    let args: Vec<&str> = words.collect();
+    Command::new(program).args(&args).arg(path).status()
 }
 
 impl Drop for TerminalGuard {
