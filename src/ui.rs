@@ -958,7 +958,7 @@ fn render_cwl_graph(app: &mut App, frame: &mut Frame, area: Rect) {
             .border_style(app.theme.border),
         )
         .style(app.theme.border)
-        .scroll((app.cwl_graph_scroll, 0));
+        .scroll((app.cwl_graph_scroll, app.cwl_graph_hscroll));
     frame.render_widget(paragraph, popup);
 }
 

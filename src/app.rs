@@ -170,6 +170,7 @@ pub(crate) struct App {
     pub(crate) cwl_doc: Option<cwl_core::documents::CWLDocument>,
     pub(crate) show_cwl_graph: bool,
     pub(crate) cwl_graph_scroll: u16,
+    pub(crate) cwl_graph_hscroll: u16,
 }
 
 impl App {
@@ -235,6 +236,7 @@ impl App {
             cwl_doc: None,
             show_cwl_graph: false,
             cwl_graph_scroll: 0,
+            cwl_graph_hscroll: 0,
         };
         if let Some(name) = crate::theme::load_saved_theme_name() {
             app.theme = crate::theme::theme_by_name(&name);
@@ -313,6 +315,7 @@ impl App {
             cwl_doc: None,
             show_cwl_graph: false,
             cwl_graph_scroll: 0,
+            cwl_graph_hscroll: 0,
         };
         if let Some(name) = crate::theme::load_saved_theme_name() {
             app.theme = crate::theme::theme_by_name(&name);
@@ -611,6 +614,7 @@ impl App {
     pub(crate) fn toggle_cwl_graph(&mut self) {
         self.show_cwl_graph = !self.show_cwl_graph;
         self.cwl_graph_scroll = 0;
+        self.cwl_graph_hscroll = 0;
     }
 
     pub(crate) fn cycle_theme(&mut self) {
@@ -1340,6 +1344,10 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent, tx: UnboundedSender<AppEv
             app.cwl_graph_scroll = app.cwl_graph_scroll.saturating_sub(5);
         } else if key.code == KeyCode::PageDown {
             app.cwl_graph_scroll = app.cwl_graph_scroll.saturating_add(5);
+        } else if key.code == KeyCode::Left {
+            app.cwl_graph_hscroll = app.cwl_graph_hscroll.saturating_sub(1);
+        } else if key.code == KeyCode::Right {
+            app.cwl_graph_hscroll = app.cwl_graph_hscroll.saturating_add(1);
         }
         return;
     }
